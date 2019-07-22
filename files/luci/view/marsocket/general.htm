@@ -1,0 +1,17 @@
+<%#
+	Copyright (C) 2019 marsocket <marsocket@gmail.com>
+	Licensed to the public under the GNU General Public License v3.
+-%>
+
+<% include("cbi/map") %>
+
+<script type="text/javascript">//<![CDATA[
+	(function() {
+		XHR.poll(5, "<%=luci.dispatcher.build_url("admin", "services", "marsocket", "status")%>", null, function(x, status) {
+			for (var k in status) {
+				var element = document.getElementById("_redir_status_" + k);
+				element.textContent = status[k] ? "<%:Running%>" : "<%:Not Running%>";
+			}
+		});
+	}());
+//]]></script>

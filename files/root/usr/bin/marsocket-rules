@@ -1,0 +1,475 @@
+#!/bin/sh
+#
+# Copyright (C) 2019 marsocket <marsocket@gmail.com>
+# This is free software, licensed under the GNU General Public License v3.
+
+usage() {
+	cat <<-EOF
+		Usage: marsocket-rules [options]
+		Valid options are:
+		    -s, --server-ip-list <server_ip_list>
+		            Ip list of remote server. (e.g., "1.1.1.1 2.2.2.2 3.3.3.3")
+		    -p, --local-port-list <local_port_list>	
+		            Port list of redir local server. (e.g., "1234 1235 1236")
+		    -B, --bypassed-iplist-file <FILE>
+		            Some files, whose content is bypassed ip list.
+		            (e.g., "/etc/marsocket/apnic.d/CN.list /etc/marsocket/apnic.d/JP.list")
+		    -b, --bypassed-iplist <wan_ips>            
+		            Wan ip of will be bypassed. (e.g., "1.1.1.1 2.2.2.2 3.3.3.3")		           
+		    -W, --forwarded-iplist-file <FILE[,port]>
+		            Some files, whose content is forwarded ip list.
+		            (e.g., "/etc/marsocket/apnic.d/JP.list /etc/marsocket/apnic.d/JP.list,1234 /etc/marsocket/apnic.d/US.list,1235")
+		    -w, --forwarded-iplist <wan_ips,[port]>
+		            Wan ip of will be forwarded. (e.g., "1.1.1.1,1234 2.3.4.5,1235 5.6.4.3")
+		    -i, --ifname-list <interface>
+		            Proxy only for the given interface.
+		    -t, --target <type,port>
+		            The default target port of lan access control, need a prefix to define proxy type.
+		            type: b (Direct, bypassed proxy)
+		                  g (Global)
+                          p (Outside the rule, proxy by default)
+                          d (Outside the rule, direct by default)
+		            (e.g., "b" or "g,1234" or "p,1234" or "d,1234")
+		    -l, --lan_hosts <type,macaddr,port>
+		            Mac address for lan of access control, need a prefix to
+		            define proxy type and need define port of redir local server.
+		            type: b (Direct, bypassed proxy)
+		                  g (Global)
+                          p (Outside the rule, proxy by default)
+                          d (Outside the rule, direct by default)
+                    (e.g., "b,5C:09:47:2F:42:C7 g,90:DD:5D:8F:ED:5C,1234")
+		    -e, --iptables-ext-args <extra_args>
+		            Extra arguments for iptables.
+		    -o, --output <type,port> 
+		            Apply the rules to the OUTPUT chain
+		    -u, --udp-relay
+		            Enable udprelay mode
+		    -f, --flush
+		            Flush the rules
+		    -h, --help
+		            Show this help message and exit
+EOF
+	exit $1
+}
+
+loger() {
+	# 1.alert 2.crit 3.err 4.warn 5.notice 6.info 7.debug
+	logger -st marsocket-rules[$$] -p$1 $2
+}
+
+flush_rules() {
+	iptables-save -c | grep -v "MARSOCKET_" | iptables-restore -c
+	if command -v ip >/dev/null 2>&1; then
+		ip rule del fwmark 1 lookup 100 2>/dev/null
+		ip route del local default dev lo table 100 2>/dev/null
+	fi
+	for setname in $(ipset -n list | grep "marsocket_"); do
+		ipset destroy $setname 2>/dev/null
+	done
+	FWI=$(uci get firewall.marsocket.path 2>/dev/null)
+	[ -n "$FWI" ] && echo '# firewall include file' >$FWI
+	return 0
+}
+
+create_hash_group() {
+	#src 全局直连
+	echo create marsocket_src_bp hash:mac hashsize 64
+	#dst 强制直连目标，包含本地LAN、远程代理服务器地址, 不可由用户指定
+	echo create marsocket_dst_sp hash:net hashsize 64
+	#dst 强制直连目标，包含用户指定的外部IP段, rules: IP CIDR
+	echo create marsocket_dst_bp hash:net hashsize 64
+	#dst 强制直连目标，包含用户指定的域名由dnsmasq解析后提供, rules: domain	
+	echo create marsocket_dst_dns_bp hash:ip hashsize 64
+	#dst 域名解析结果强制走用户指定的代理
+	echo create marsocket_dst_dns_fw hash:ip hashsize 64
+	#dst 目标强制走用户指定的代理
+	echo create marsocket_dst_fw hash:net hashsize 64
+	for port in $LOCAL_PORT_LIST; do
+		#src 默认走代理，规则之外，全部代理
+		echo create marsocket_src_pr_ac_$port hash:mac hashsize 64
+		#src 规则优先，规则之外默认走直连
+		echo create marsocket_src_dr_ac_$port hash:mac hashsize 64		
+		#src 全局代理
+		echo create marsocket_src_fw_$port hash:mac hashsize 64
+		#dst 域名解析结果强制走规则指定的代理
+		echo create marsocket_dst_dns_fw_$port hash:ip hashsize 64
+		#dst 目标强制走规则指定的代理
+		echo create marsocket_dst_fw_$port hash:net hashsize 64
+		#dst 域名解析结果强制走规则指定的代理, priority over lan, 允许使用私有网段的地址，优先于本地LAN地址过滤
+		echo create marsocket_dst_pol_dns_fw_$port hash:ip hashsize 64
+		#dst 目标强制走规则指定的代理, priority over lan, 允许使用私有网段的地址，优先于本地LAN地址过滤
+		echo create marsocket_dst_pol_fw_$port hash:net hashsize 64
+	done
+}
+
+add_dst_fw_group() {
+	for list in $WAN_FW_LIST; do
+		local file=$(echo $list | awk -F',' '{ print $1 }')	     
+        local port=$(echo $list | awk -F',' '{ print $2 }')
+        [ -n "$port" ] && port="_${port}"
+        sed -e "s/^/add marsocket_dst_fw${port} /" ${file:=/dev/null} 2>/dev/null
+	done
+	for ipaddr in $WAN_FW_IP; do
+		local ip=$(echo $ipaddr | awk -F',' '{ print $1 }')	     
+        local port=$(echo $ipaddr | awk -F',' '{ print $2 }')
+        [ -n "$port" ] && port="_${port}"
+        if [ -n "$ip" ]; then
+        	echo "add marsocket_dst_pol_fw${port} $ip"
+		fi
+	done
+}
+
+ipset_init() {
+	ipset -! restore <<-EOF || return 1
+		$(create_hash_group)
+		$(gen_lan_host_ipset_entry)
+		$(gen_special_purpose_ip | sed -e "s/^/add marsocket_dst_sp /")
+		$(for file in $WAN_BP_LIST; do sed -e "s/^/add marsocket_dst_bp /" ${file:=/dev/null} 2>/dev/null; done)
+		$(for ip in $WAN_BP_IP; do echo "add marsocket_dst_bp $ip"; done)
+		$(add_dst_fw_group)
+EOF
+	return 0
+}
+
+ipt_nat() {
+	include_ac_rules nat
+	for port in $LOCAL_PORT_LIST; do
+		iptables -t nat -A MARSOCKET_WAN_FW_$port -p tcp \
+			-j REDIRECT --to-ports $port || return 1
+	done
+	include_output_ac_rules nat
+	return $?
+}
+
+ipt_mangle() {
+	[ "$TPROXY" = "1" ] || return 0
+	if !(lsmod | grep -q TPROXY && command -v ip >/dev/null); then
+		loger 4 "TPROXY or ip not found."
+		return 0
+	fi
+	ip rule add fwmark 1 lookup 100
+	ip route add local default dev lo table 100
+	include_ac_rules mangle
+	for port in $LOCAL_PORT_LIST; do
+		iptables -t mangle -A MARSOCKET_WAN_FW_$port -p udp \
+			-j TPROXY --on-port $port --tproxy-mark 0x01/0x01
+	done
+	#include_output_ac_rules mangle
+	return $?
+}
+
+export_ipt_rules() {
+	[ -n "$FWI" ] || return 0
+	cat <<-CAT >>$FWI
+	iptables-save -c | grep -v "MARSOCKET_" | iptables-restore -c
+	iptables-restore -n <<-EOF
+	$(iptables-save | grep -E "MARSOCKET_|^\*|^COMMIT" |\
+			sed -e "s/^-A \(OUTPUT\|PREROUTING\)/-I \1 1/")
+	EOF
+CAT
+	return $?
+}
+
+gen_lan_host_ipset_entry() {
+	for host in $LAN_HOSTS; do
+		local fwtype=$(echo $host | awk -F',' '{ print $1 }')
+        local addr=$(echo $host | awk -F',' '{ print $2 }')
+        local fwport=$(echo $host | awk -F',' '{ print $3 }')
+		case $fwtype in
+			b)
+				#禁用代理
+				echo add marsocket_src_bp $addr
+				;;
+			g)
+				#全局走此host自己指定的代理
+				echo add marsocket_src_fw_$fwport $addr
+				;;			
+			p)
+				#默认走代理，规则之外，全部代理
+				echo add marsocket_src_pr_ac_$fwport $addr
+				;;
+			d)
+				#默认走直连，规则之外，全部直连
+				echo add marsocket_src_dr_ac_$fwport $addr
+				;;				
+		esac
+	done
+}
+
+gen_special_purpose_ip() {
+	cat <<-EOF | grep -E "^([0-9]{1,3}\.){3}[0-9]{1,3}"
+		0.0.0.0/8
+		10.0.0.0/8
+		100.64.0.0/10
+		127.0.0.0/8
+		169.254.0.0/16
+		172.16.0.0/12
+		192.0.0.0/24
+		192.0.2.0/24
+		192.31.196.0/24
+		192.52.193.0/24
+		192.88.99.0/24
+		192.168.0.0/16
+		192.175.48.0/24
+		198.18.0.0/15
+		198.51.100.0/24
+		203.0.113.0/24
+		224.0.0.0/4
+		240.0.0.0/4
+		255.255.255.255
+		$SERVER_IP_LIST
+EOF
+}
+
+
+include_output_ac_rules() {
+	local protocol=$([ "$1" = "mangle" ] && echo udp || echo tcp)
+	local ipt="iptables -t $1"
+	$ipt -N MARSOCKET_OUTPUT_DG
+	$ipt -N MARSOCKET_OUTPUT_AC
+	case $OUTPUT_AC_TYPE in	
+		g)
+			$ipt -A MARSOCKET_OUTPUT_DG -p $protocol $EXT_ARGS -j MARSOCKET_WAN_GP_$OUTPUT_AC_PORT
+			;;
+		p|d)
+			$ipt -A MARSOCKET_OUTPUT_DG -p $protocol $EXT_ARGS -j MARSOCKET_OUTPUT_AC			
+			#强制代理规则, 这里因为可能有局域网IP段，所以要放在marsocket_dst_sp之前
+			for port in $LOCAL_PORT_LIST; do
+				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_pol_dns_fw_$port dst -j MARSOCKET_WAN_FW_$OUTPUT_AC_PORT
+				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_pol_fw_$port dst -j MARSOCKET_WAN_FW_$OUTPUT_AC_PORT
+			done
+			#绕过本地LAN
+			$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_sp dst -j RETURN
+			#各种强制代理规则
+			for port in $LOCAL_PORT_LIST; do
+				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_dns_fw_$port dst -j MARSOCKET_WAN_FW_$OUTPUT_AC_PORT
+				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_fw_$port dst -j MARSOCKET_WAN_FW_$OUTPUT_AC_PORT
+			done
+			$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_dns_bp dst -j RETURN
+			$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_bp dst -j RETURN
+			$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_dns_fw dst -j MARSOCKET_WAN_FW_$OUTPUT_AC_PORT
+			$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_fw dst -j MARSOCKET_WAN_FW_$OUTPUT_AC_PORT			
+			;;
+		*)
+			$ipt -A MARSOCKET_OUTPUT_DG -j RETURN
+			;;			
+	esac
+	if [ "$OUTPUT_AC_TYPE" = "p" ]; then
+		$ipt -A MARSOCKET_OUTPUT_AC -j MARSOCKET_WAN_FW_$OUTPUT_AC_PORT
+	else
+		$ipt -A MARSOCKET_OUTPUT_AC -j RETURN
+	fi
+	$ipt -I OUTPUT 1 -p $protocol -j MARSOCKET_OUTPUT_DG
+}
+
+
+create_ac_rules() {
+	for port in $LOCAL_PORT_LIST; do
+		#全局代理, 绕过本地lan
+		echo :MARSOCKET_WAN_GP_$port - [0:0]
+		#规则代理
+		echo :MARSOCKET_WAN_AC_$port - [0:0]
+		#代理路由
+		echo :MARSOCKET_WAN_FW_$port - [0:0]
+	done
+}
+
+add_lan_ac_rules() {
+	[ "$LAN_TARGET_AC_TYPE" = "b" ] && echo -A MARSOCKET_LAN_AC -j RETURN
+	[ "$LAN_TARGET_AC_TYPE" = "g" ] && echo -A MARSOCKET_LAN_AC -j MARSOCKET_WAN_GP_$LAN_TARGET_AC_PORT
+	for port in $LOCAL_PORT_LIST; do
+		#指定走全局代理
+		echo -A MARSOCKET_LAN_AC -m set --match-set marsocket_src_fw_$port src -j MARSOCKET_WAN_GP_$port
+		#绕过本地LAN
+		echo -A MARSOCKET_WAN_GP_$port -m set --match-set marsocket_dst_sp dst -j RETURN
+		#全局走代理
+		echo -A MARSOCKET_WAN_GP_$port -j MARSOCKET_WAN_FW_$port		
+	done	
+}
+
+add_wan_ac_rules() {
+	
+	for port in $LOCAL_PORT_LIST; do
+		#强制代理规则, 这里因为可能有局域网IP段，所以要放在marsocket_dst_sp之前
+		echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_dst_pol_dns_fw_$port dst -j MARSOCKET_WAN_FW_$port
+		echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_dst_pol_fw_$port dst -j MARSOCKET_WAN_FW_$port
+	done
+
+	#绕过本地LAN
+	echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_dst_sp dst -j RETURN
+
+	#各种强制代理规则 
+	for port in $LOCAL_PORT_LIST; do
+		echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_dst_dns_fw_$port dst -j MARSOCKET_WAN_FW_$port
+		echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_dst_fw_$port dst -j MARSOCKET_WAN_FW_$port
+	done
+	
+	#WAN直连
+	echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_dst_dns_bp dst -j RETURN
+	echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_dst_bp dst -j RETURN
+
+	for port in $LOCAL_PORT_LIST; do		
+		#代理优先，规则之外全部代理
+		echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_src_pr_ac_$port src -j MARSOCKET_WAN_AC_$port
+		#直连优先，规则之外全部直连
+		echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_src_dr_ac_$port src -j MARSOCKET_WAN_AC_$port
+	done
+
+	#走指定的规则代理
+	for port in $LOCAL_PORT_LIST; do
+		#规则中使用"Use default proxy"作为代理的, 使用用户自己指定的代理
+		echo -A MARSOCKET_WAN_AC_$port -m set --match-set marsocket_dst_dns_fw dst -j MARSOCKET_WAN_FW_$port
+		echo -A MARSOCKET_WAN_AC_$port -m set --match-set marsocket_dst_fw dst -j MARSOCKET_WAN_FW_$port		
+		#代理优先，规则之外全部代理
+		echo -A MARSOCKET_WAN_AC_$port -m set --match-set marsocket_src_pr_ac_$port src -j MARSOCKET_WAN_FW_$port
+		#直连优先，规则之外全部直连
+		echo -A MARSOCKET_WAN_AC_$port -m set --match-set marsocket_src_dr_ac_$port src -j RETURN
+	done	
+
+	#规则中使用"Use default proxy"作为代理的, 且用户未指定规则，则使用Zone LAN指定的代理
+	echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_dst_dns_fw dst -j MARSOCKET_WAN_FW_$LAN_TARGET_AC_PORT
+	echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_dst_fw dst -j MARSOCKET_WAN_FW_$LAN_TARGET_AC_PORT
+
+	#ZONE LAN, 未指定规则的用户，使用ZONE LAN 默认的出站模式
+	if [ "$LAN_TARGET_AC_TYPE" = "d" ]; then
+		#直连优先，规则之外全部直连
+		echo -A MARSOCKET_WAN_AC -j RETURN
+	else
+		#代理优先，规则之外全部代理
+		echo -A MARSOCKET_WAN_AC -j MARSOCKET_WAN_FW_$LAN_TARGET_AC_PORT
+	fi		
+}
+
+include_ac_rules() {
+	local protocol=$([ "$1" = "mangle" ] && echo udp || echo tcp)
+	iptables-restore -n <<-EOF
+	*$1
+	:MARSOCKET_LAN_DG - [0:0]
+	:MARSOCKET_LAN_AC - [0:0]
+	:MARSOCKET_WAN_AC - [0:0]
+	$(create_ac_rules)
+	-A MARSOCKET_LAN_DG -m set --match-set marsocket_src_bp src -j RETURN
+	-A MARSOCKET_LAN_DG -p ${protocol} ${EXT_ARGS} -j MARSOCKET_LAN_AC
+	$(add_lan_ac_rules)
+	-A MARSOCKET_LAN_AC -j MARSOCKET_WAN_AC
+	$(add_wan_ac_rules)
+	$(gen_prerouting_rules $protocol)
+	COMMIT
+EOF
+}
+
+gen_prerouting_rules() {
+	[ -z "$IFNAMES" ] && echo -I PREROUTING 1 -p $1 -j MARSOCKET_LAN_DG
+	for ifname in $IFNAMES; do
+		echo -I PREROUTING 1 -i $ifname -p $1 -j MARSOCKET_LAN_DG
+	done
+}
+
+
+get_args() {
+	SERVER_IP_LIST=""
+	LOCAL_PORT_LIST=""
+	WAN_BP_LIST=""
+	WAN_BP_IP=""
+	WAN_FW_LIST=""
+	WAN_FW_IP=""
+	IFNAMES=""
+	LAN_TARGET_AC_TYPE=""
+	LAN_TARGET_AC_PORT=""
+	LAN_HOSTS=""
+	EXT_ARGS=""
+	OUTPUT_AC_TYPE=""
+	OUTPUT_AC_PORT=""
+	TPROXY="0"
+    while [ ${#} -gt 0 ]; do
+        case "${1}" in
+            --server-ip-list | -s)
+				SERVER_IP_LIST=$(for ip in $2; do echo $ip; done)
+				shift
+				;;
+			--local-port-list | -p)
+				LOCAL_PORT_LIST="$2"
+				#echo "LOCAL_PORT_LIST: ${LOCAL_PORT_LIST}"
+				shift
+				;;
+            --bypassed-iplist-file | -B)
+                WAN_BP_LIST="$2"
+                #echo "WAN_BP_LIST: ${WAN_BP_LIST}"
+                shift
+                ;;
+            --bypassed-iplist | -b)
+                WAN_BP_IP="$2"
+                #echo "WAN_BP_IP: ${WAN_BP_IP}"
+                shift
+                ;;                
+            --forwarded-iplist-file | -W)
+                WAN_FW_LIST="$2"
+                #echo "WAN_FW_LIST: ${WAN_FW_LIST}"
+                shift
+                ;;
+            --forwarded-iplist | -w)
+                WAN_FW_IP="$2"
+                #echo "WAN_FW_IP: ${WAN_FW_IP}"
+                shift
+                ;;
+            --ifname-list | -i)
+                IFNAMES="$2"
+                shift
+                ;;
+            --target | -t)
+				LAN_TARGET_AC_TYPE=$(echo "$2" | awk -F',' '{ print $1 }')
+				LAN_TARGET_AC_PORT=$(echo "$2" | awk -F',' '{ print $2 }')
+				#echo $2
+                shift
+                ;;
+            --lan_hosts | -l)
+				LAN_HOSTS="$2"
+				#echo $LAN_HOSTS
+		        shift
+                ;;
+			--iptables-ext-args | -e)
+				EXT_ARGS="$2"
+				shift
+				;;
+			--output | -o)
+				OUTPUT_AC_TYPE=$(echo "$2" | awk -F',' '{ print $1 }')
+				OUTPUT_AC_PORT=$(echo "$2" | awk -F',' '{ print $2 }')
+				#echo $2
+				shift
+				;;
+			--udp-relay | -u)
+				TPROXY="1"
+				;;
+			--flush | -f)
+				flush_rules
+				exit 0
+				;;
+            --help | -h | -v)
+                usage 0
+                ;;				
+            *)
+                echo "Invalid argument: $1"
+                usage 1
+                ;;
+        esac
+        shift 1
+    done
+
+    [ -z "$SERVER_IP_LIST" ] && echo 'Error: Need --server-ip-list.\n' && exit 1
+    [ -z "$LOCAL_PORT_LIST" ] && echo 'Error: Need --local-port-list.\n' && exit 1
+	[ -z "$LAN_TARGET_AC_TYPE" ] && LAN_TARGET_AC_TYPE="b"
+	[ -z "$LAN_TARGET_AC_PORT" ] && LAN_TARGET_AC_TYPE="b"
+	[ -z "$OUTPUT_AC_TYPE" ] && OUTPUT_AC_TYPE="b"
+	[ -z "$OUTPUT_AC_PORT" ] && OUTPUT_AC_TYPE="b"
+}
+
+main() {
+    [ -z "$1" ] && usage 0
+    get_args "$@"
+	flush_rules && ipset_init && ipt_nat && ipt_mangle && export_ipt_rules
+	RET=$?
+	[ "$RET" = 0 ] || loger 3 "Start failed!"
+	exit $RET
+}
+
+main "$@"

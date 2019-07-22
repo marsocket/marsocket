@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# Copyright (C) 2019 marsocket <marsocket@gmail.com>
+# This is free software, licensed under the GNU General Public License v3.
+
+usage() {
+	cat <<-EOF
+		Usage: "$0" [options]
+		Valid options are:
+		    -c <CODE>           code of country
+		    -f <APNIC>          filename of apnic-latest
+		    -d <DEST_PATH>      path of output listfile
+		    [ -v, -h ]          show this help message and exit
+EOF
+	exit $1
+}
+
+while getopts ":c:f:d:hv" arg; do
+	case "$arg" in
+		c)
+			CODE=$OPTARG
+			;;		
+		f)
+			APNIC=$OPTARG
+			;;
+		d)
+			DEST_PATH=$OPTARG
+			;;
+		v|h)
+			usage 0
+			;;
+		*)
+			;;
+	esac
+done
+
+[ -n "$CODE" ] || usage 1
+[ -f "$APNIC" ] || usage 1
+[ -d "$DEST_PATH" ] || usage 1
+
+FILENAME=$DEST_PATH/$CODE.list
+TMP_FILENAME=/tmp/$CODE.list.tmp
+cat $APNIC | awk -F\| '/'$CODE'\|ipv4/ { printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > $TMP_FILENAME
+[ "$?" == "0" ] || exit 1
+mv $TMP_FILENAME $FILENAME
+exit 0
+

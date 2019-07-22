@@ -1,0 +1,508 @@
+#!/bin/sh /etc/rc.common
+#
+# Copyright (C) 2014-2017 Jian Chang <aa65535@live.com>
+#
+# This is free software, licensed under the GNU General Public License v3.
+# See /LICENSE for more information.
+#
+
+START=75
+USE_PROCD=1
+#PROCD_DEBUG=1
+
+EXTRA_COMMANDS=rules
+
+DNSMASQ_CONF="/etc/dnsmasq.conf"
+CONF_NAME="marsocket"
+IPLIST_CONF_PATH="/etc/${CONF_NAME}/apnic.d"
+DNSMASQ_CONF_PATH="/etc/${CONF_NAME}/dnsmasq.d"
+HAPROXY_CONF_PATH="/etc/haproxy"
+APNIC_LATEST_FILE="/etc/${CONF_NAME}/delegated-apnic-latest"
+GFWLIST_FILE="/etc/${CONF_NAME}/gfwlist.txt"
+GFWLIST_RULES_FILE="${DNSMASQ_CONF_PATH}/gfwlist.conf"
+DNSMASQ_CONF_FILE="${DNSMASQ_CONF_PATH}/${CONF_NAME}.conf"
+HAPROXY_CONF_FILE="${HAPROXY_CONF_PATH}/${CONF_NAME}.cfg"
+#HAPROXY_INIT_FILE="/etc/init.d/haproxy"
+REDIR_BIN="ss-redir"
+TUNNEL_BIN="ss-tunnel"
+TCPDNS_BIN="dns-forwarder"
+COUNTRYIPS_BIN="marsocket-countryips.sh"
+GFWLIST_BIN="marsocket-gfwlist.sh"
+RULES_BIN="marsocket-rules"
+
+uci_get_by_name() {
+	local ret=$(uci get $CONF_NAME.$1.$2 2>/dev/null)
+	echo ${ret:=$3}
+}
+
+uci_get_by_type() {
+	local ret=$(uci get $CONF_NAME.@$1[0].$2 2>/dev/null)
+	echo ${ret:=$3}
+}
+
+# $1: name of ListValue (e.g.: nodes)
+# $2: index of ListValue (e.g.: 1)
+# $3: field of ListValue (e.g.: server)
+# $4: default value
+uci_get_by_index() {
+	local ret=$(uci get $CONF_NAME.@$1[$2].$3 2>/dev/null)
+	echo ${ret:=$4}
+}
+
+uci_bool_by_name() {
+	case "$(uci_get_by_name $1 $2)" in
+		1|on|true|yes|enabled) return 0;;
+	esac
+	return 1
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#resolve domain to ip
+#$1: domain or hostname
+resolve_server_ip() {
+	local host=$1
+	if echo $host|grep -E "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$">/dev/null; then         
+		hostip="$host"
+	elif  [ "$host" != "${host#*:[0-9a-fA-F]}" ] ;then
+		hostip="$host"
+	else
+		#hostip=$(ping "$host" -s 1 -c 1 | grep PING | cut -d'(' -f 2 | cut -d')' -f1)
+		hostip=$(nslookup "$host" | grep -v \#53 | grep Address | sed s/[[:space:]]//g | awk -F ':' '{ print $2 }')
+		if echo $hostip|grep -E "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$">/dev/null; then
+			hostip="$hostip"
+		else
+			hostip="127.0.0.1"
+		fi
+	fi
+	echo "$hostip"
+}
+
+# $1: index of nodes (e.g.: 0 or 1 or 2)
+# $2: field of node (e.g.: server)
+# $3: default value
+get_node_value() {
+	uci_get_by_index nodes $1 $2 $3
+}
+
+# $1: index of groups (e.g.: 0 or 1 or 2)
+# $2: field of group (e.g.: cur_node)
+# $3: default value
+get_group_value() {
+	uci_get_by_index groups $1 $2 $3
+}
+
+get_node_bool() {
+	case "$(get_node_value $1 $2 0)" in
+		1|on|true|yes|enabled) return 0;;
+	esac
+	return 1
+}
+
+get_group_bool() {
+	case "$(get_group_value $1 $2 0)" in
+		1|on|true|yes|enabled) return 0;;
+	esac
+	return 1
+}
+
+#$1 proxy_group_idx
+get_proxy_port() {
+	local proxy_group_idx=$1
+	local proxy_port="nil"
+	[ "$proxy_group_idx" != "nil" ] && proxy_port=$(get_group_value $proxy_group_idx redir_port nil)
+	echo "$proxy_port"
+}
+
+#$1 dns_group_idx
+get_dns_port() {
+	local dns_group_idx=$1
+	local dns_port="53"
+	if [ "$dns_group_idx" != "nil" ]; then
+		if [ "$(get_group_value $dns_group_idx enable_remote_dns)" = "1" ]; then
+			if [ "$(get_group_value $dns_group_idx enable_tcp_dns)" = "1" ]; then
+				dns_port=$(get_group_value $dns_group_idx tcp_dns_port)
+			else
+				dns_port=$(get_group_value $dns_group_idx tunnel_port)
+			fi
+		fi
+	fi
+	echo "$dns_port"
+}
+
+#$1 proxy_group_idx
+#$2 "pol_", priority over lan
+get_ipset_name() {
+	local proxy_group_idx=$1
+	local ipset_name=""
+	local pol=$2
+	case "$proxy_group_idx" in
+		nil)
+			#nil: 强制直连，绕过代理
+			ipset_name="marsocket_dst_dns_bp"
+			;;
+		use_default_proxy)
+			#用户各自指定的代理
+			ipset_name="marsocket_dst_${pol}dns_fw"
+			;;
+		*)
+			#规则指定的代理
+			local port=$(get_group_value $proxy_group_idx redir_port)
+			ipset_name="marsocket_dst_${pol}dns_fw_${port}"
+			;;
+	esac
+	echo "$ipset_name"
+}
+
+validate_node() {
+	[ "$(uci get $CONF_NAME.@nodes[$1] 2>/dev/null)" = "nodes" ]
+}
+
+
+
+start_instance() {
+	local cfg_name=$1	#cfgname of groups
+
+	uci_bool_by_name $cfg_name enable || return 0
+
+	local cur_node=$(uci_get_by_name $cfg_name cur_node)
+	[ "$cur_node" -ge 1 2>/dev/null ] || return 0
+	#[[ "$cur_node" = "nil" || "$cur_node" = "0" ]] && return 0
+	local nodelist=$(uci_get_by_name $cfg_name nodelist)
+	[ "$(echo $nodelist | awk '{ print NF }')" -ge "$cur_node" 2>/dev/null ] || return 0
+
+	local node_idx=$(echo $nodelist | awk '{ print $i }' i=$cur_node)
+	validate_node $node_idx || return 0
+
+	local server_address=$(resolve_server_ip $(get_node_value $node_idx server))
+	local server_port=$(get_node_value $node_idx server_port)
+	local password=$(get_node_value $node_idx password)
+	local key=$(get_node_value $node_idx key)
+	local encrypt_method=$(get_node_value $node_idx encrypt_method)
+	local plugin=$(get_node_value $node_idx plugin)
+	local plugin_opts=$(get_node_value $node_idx plugin_opts)
+	local timeout=$(get_node_value $node_idx timeout 60)
+	
+	local reuse_port_count=$(uci_get_by_name $cfg_name reuse_port_count 1)
+	uci_bool_by_name $cfg_name enable_reuse_port || reuse_port_count=1
+	for _ in `seq 1 $reuse_port_count`; do
+		procd_open_instance
+		procd_set_param respawn
+		procd_set_param stdout 1
+		procd_set_param stderr 1
+		procd_set_param command $REDIR_BIN
+		procd_append_param command "-l" "$(uci_get_by_name $cfg_name redir_port 1234)"
+		procd_append_param command "-s" "$server_address"
+		procd_append_param command "-p" "$server_port"
+		procd_append_param command "-m" "$encrypt_method"
+		if [ -n "$key" ]; then
+			procd_append_param command "--key" "$key"
+		elif [ -n "$password" ]; then
+			procd_append_param command "-k" "$password"
+		fi
+		[ -n "$plugin" ] && procd_append_param command "--plugin" "$plugin"
+		[ -n "$plugin_opts" ] && procd_append_param command "--plugin-opts" "$plugin_opts"
+		get_node_bool $node_idx fast_open && procd_append_param command "--fast-open"
+		get_node_bool $node_idx no_delay && procd_append_param command "--no-delay"
+		procd_append_param command "-t" "$timeout"
+		procd_append_param command "-b" "0.0.0.0"		
+		procd_append_param command "--mtu" "$(uci_get_by_name $cfg_name redir_mtu 1492)"
+		procd_append_param command "-u"
+		uci_bool_by_name $cfg_name enable_reuse_port && procd_append_param command "--reuse-port"
+		procd_close_instance
+	done
+
+	uci_bool_by_name $cfg_name enable_remote_dns || return 0
+	local tunnel_port=$(uci_get_by_name $cfg_name tunnel_port 1234)
+	procd_open_instance
+	procd_set_param respawn
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param command $TUNNEL_BIN
+	procd_append_param command "-l" "$tunnel_port"	
+	procd_append_param command "-s" "$server_address"
+	procd_append_param command "-p" "$server_port"
+	procd_append_param command "-m" "$encrypt_method"
+	if [ -n "$key" ]; then
+		procd_append_param command "--key" "$key"
+	elif [ -n "$password" ]; then
+		procd_append_param command "-k" "$password"
+	fi
+	[ -n "$plugin" ] && procd_append_param command "--plugin" "$plugin"
+	[ -n "$plugin_opts" ] && procd_append_param command "--plugin-opts" "$plugin_opts"
+	get_node_bool $node_idx fast_open && procd_append_param command "--fast-open"
+	get_node_bool $node_idx no_delay && procd_append_param command "--no-delay"
+	procd_append_param command "-t" "$timeout"
+	procd_append_param command "-b" "0.0.0.0"
+	procd_append_param command "--mtu" "$(uci_get_by_name $cfg_name tunnel_mtu 1492)"
+	procd_append_param command "-u"
+	procd_append_param command "-L" "$(uci_get_by_name $cfg_name remote_dns_servers 8.8.8.8):$(uci_get_by_name $cfg_name remote_dns_port 53)"
+	procd_append_param command "-u"
+	procd_close_instance
+
+	uci_bool_by_name $cfg_name enable_tcp_dns || return 0
+	procd_open_instance
+	procd_set_param respawn
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param command $TCPDNS_BIN
+	procd_append_param command "-p" "$(uci_get_by_name $cfg_name tcp_dns_port 5353)"	
+	procd_append_param command "-b" "127.0.0.1"
+	procd_append_param command "-s" "127.0.0.1:${tunnel_port}"
+	procd_close_instance
+}
+
+
+
+create_gfwlist_conf() {
+	local cfg_name=$1
+	local dns_group_idx=$(uci_get_by_type $cfg_name dns_group_idx nil)
+	local proxy_group_idx=$(uci_get_by_type $cfg_name proxy_group_idx nil)
+	local dns_port=$(get_dns_port $dns_group_idx)
+	local ipset_name=$(get_ipset_name $proxy_group_idx)
+	$GFWLIST_BIN -f "$GFWLIST_FILE" -p "$dns_port" -s "$ipset_name" -o "$GFWLIST_RULES_FILE" >/dev/null
+}
+
+create_apnic_ips() {
+	local cfg_name=$1 #cfgname of rules_iplist
+	local country=$(uci_get_by_name $cfg_name country)
+	$COUNTRYIPS_BIN -c "$country" -f "$APNIC_LATEST_FILE" -d "$IPLIST_CONF_PATH" >/dev/null
+}
+
+add_dnsmasq_rules() {
+	local cfg_name=$1 #cfgname of rules_domain
+	local dns_group_idx=$(uci_get_by_name $cfg_name dns_group_idx nil)
+	local proxy_group_idx=$(uci_get_by_name $cfg_name proxy_group_idx nil)	
+	local dns_port=$(get_dns_port $dns_group_idx)
+	local domain=$(uci_get_by_name $cfg_name domain)
+	echo "server=/${domain}/127.0.0.1#${dns_port}" >> "$DNSMASQ_CONF_FILE"
+	if [ "$(uci_get_by_name $cfg_name allow_rebind)" = "1" ]; then
+		local ipset_name=$(get_ipset_name $proxy_group_idx "pol_")
+		echo "ipset=/${domain}/${ipset_name}" >> "$DNSMASQ_CONF_FILE"
+		echo "rebind-domain-ok=/${domain}/" >> "$DNSMASQ_CONF_FILE"
+	else
+		local ipset_name=$(get_ipset_name $proxy_group_idx)
+		echo "ipset=/${domain}/${ipset_name}" >> "$DNSMASQ_CONF_FILE"
+	fi
+}
+
+restart_dnsmasq() {
+	[ $(grep "conf-dir=${DNSMASQ_CONF_PATH}" "$DNSMASQ_CONF") ] || echo "conf-dir=${DNSMASQ_CONF_PATH}" >> /etc/dnsmasq.conf
+	/etc/init.d/dnsmasq restart	
+}
+
+create_dnsmasq_conf() {
+	mkdir -p "$DNSMASQ_CONF_PATH"
+	command -v "$GFWLIST_BIN" >/dev/null && create_gfwlist_conf rules_gfwlist
+	rm -rf "$DNSMASQ_CONF_FILE"
+	config_foreach add_dnsmasq_rules rules_domain
+	restart_dnsmasq
+}
+
+add_haproxy_rules() {
+	local cfg_name=$1 #cfgname of groups
+	[ "$(uci_get_by_name $cfg_name switch_mode)" == "haproxy" ] || return 0
+	local haproxy_port=$(uci_get_by_name $cfg_name haproxy_port 1234)
+	local nodelist=$(uci_get_by_name $cfg_name nodelist)
+	local node_count=$(echo $nodelist | awk '{ print NF }')
+	[ "$node_count" -ge 1 2>/dev/null ] || return 0
+
+	echo "frontend ${CONF_NAME}-${cfg_name}-frontend" >> "$HAPROXY_CONF_FILE"
+	echo "	bind 127.0.0.1:${haproxy_port}" >> "$HAPROXY_CONF_FILE"
+	echo "	default_backend ${CONF_NAME}-${cfg_name}-backend" >> "$HAPROXY_CONF_FILE"
+	echo "" >> "$HAPROXY_CONF_FILE"
+	echo "backend ${CONF_NAME}-${cfg_name}-backend" >> "$HAPROXY_CONF_FILE"
+	for node_idx in $nodelist; do
+		validate_node $node_idx || continue
+		local server_address=$(get_node_value $node_idx server)
+		local server_port=$(get_node_value $node_idx server_port)
+		echo "	server node_${node_idx} ${server_address}:${server_port} check observe layer4 rise 5 fall 5" >> "$HAPROXY_CONF_FILE"
+	done
+	echo "" >> "$HAPROXY_CONF_FILE"
+}
+
+restart_haproxy() {
+	[ -f "$HAPROXY_INIT_FILE" ] || return 0
+	(ls /etc/rc.d | grep ^S | grep haproxy >/dev/null 2>&1) || return 0
+	/etc/init.d/haproxy restart
+	# if !(grep "\-f ${HAPROXY_CONF_FILE}" "$HAPROXY_INIT_FILE" >/dev/null 2>&1); then
+	# 	echo sed -i "s:-f \$HAPROXY_CONFIG:-f \$HAPROXY_CONFIG -f ${HAPROXY_CONF_FILE}:g" "$HAPROXY_INIT_FILE"
+	# fi
+}
+
+create_haproxy_conf() {
+	mkdir -p "$HAPROXY_CONF_PATH"
+	rm -rf "$HAPROXY_CONF_FILE"
+	config_foreach add_haproxy_rules groups
+	#restart_haproxy
+}
+
+make_config() {
+	mkdir -p "$IPLIST_CONF_PATH"	
+	command -v "$COUNTRYIPS_BIN" >/dev/null && config_foreach create_apnic_ips rules_iplist
+	create_dnsmasq_conf
+	create_haproxy_conf
+}
+
+
+
+
+get_server_ip_list() {
+	local domain=$(uci_get_by_name $1 server)
+	echo $(resolve_server_ip $domain)
+}
+
+get_local_port_list() {
+	echo $(uci_get_by_name $1 redir_port)	
+}
+
+make_rules_iplist() {
+	local cfg_name=$1 #cfgname of rules_iplist
+	local country=$(uci_get_by_name $cfg_name country)
+	local proxy_group_idx=$(uci_get_by_name $cfg_name proxy_group_idx nil)
+	case "$proxy_group_idx" in
+		nil) 
+			rules_wan_bp_list="${rules_wan_bp_list} ${IPLIST_CONF_PATH}/${country}.list"
+			;;
+		use_default_proxy)
+			rules_wan_fw_list="${rules_wan_fw_list} ${IPLIST_CONF_PATH}/${country}.list"
+			;;
+		*)
+			local port=$(get_proxy_port $proxy_group_idx)
+			[ "$port" != "nil" ] && rules_wan_fw_list="${rules_wan_fw_list} ${IPLIST_CONF_PATH}/${country}.list,${port}"
+			;;
+	esac
+}
+
+make_rules_ip() {
+	local cfg_name=$1 #cfgname of rules_ip
+	local net=$(uci_get_by_name $cfg_name net)
+	local proxy_group_idx=$(uci_get_by_name $cfg_name proxy_group_idx nil)
+	if [ -n "$net" ]; then
+		case "$proxy_group_idx" in
+			nil) 
+				rules_wan_bp_ips="${rules_wan_bp_ips} ${net}"
+				;;
+			use_default_proxy)
+				rules_wan_fw_ips="${rules_wan_fw_ips} ${net}"
+				;;
+			*)
+				local port=$(get_proxy_port $proxy_group_idx)
+				[ "$port" != "nil" ] && rules_wan_fw_ips="${rules_wan_fw_ips} ${net},${port}"
+				;;
+		esac
+	fi	
+}
+
+get_lan_hosts() {
+	local cfg_name=$1 #cfgname of lan_hosts
+	uci_bool_by_name $cfg_name enable || return 0
+	local macaddr=$(uci_get_by_name $cfg_name macaddr)
+	local type=$(uci_get_by_name $cfg_name type)
+	local proxy_group_idx=$(uci_get_by_name $cfg_name proxy_group_idx)
+	local port=""
+	if [ $proxy_group_idx = "nil" ]; then
+		port=$rules_lan_port
+	else
+		port=$(get_proxy_port $proxy_group_idx)
+	fi
+	if [ "$port" = "nil" ]; then
+		echo "b,${macaddr}"
+	else
+		echo "${type},${macaddr},${port}"
+	fi
+}
+
+enable_rules() {
+	command -v "$RULES_BIN" >/dev/null || return 1
+	rules_wan_bp_list=""
+	rules_wan_bp_ips=""
+	rules_wan_fw_list=""
+	rules_wan_fw_ips=""
+	rules_lan_port=""
+	config_foreach make_rules_iplist rules_iplist
+	config_foreach make_rules_ip rules_ip
+
+	local lan_type=$(uci_get_by_type lan type)
+	local lan_proxy_group_idx=$(uci_get_by_type lan proxy_group_idx nil)
+	rules_lan_port=$(get_proxy_port $lan_proxy_group_idx)
+	local lan_target=""
+	if [ "$rules_lan_port" = "nil" ]; then
+		lan_target="b"
+	else		
+		lan_target="${lan_type},${rules_lan_port}"
+	fi
+
+	local localhost_type=$(uci_get_by_type local_host type)
+	local localhost_proxy_group_idx=$(uci_get_by_type local_host proxy_group_idx nil)
+	local localhost_port=""
+	local output_target=""
+	if [ "$localhost_proxy_group_idx" = "nil" ]; then
+		localhost_port=$rules_lan_port
+	else
+		localhost_port=$(get_proxy_port $localhost_proxy_group_idx)
+	fi
+	if [ "$localhost_port" = "nil" ]; then
+		output_target="b"
+	else
+		output_target="${localhost_type},${localhost_port}"
+	fi
+
+	$RULES_BIN \
+		--server-ip-list "$(config_foreach get_server_ip_list nodes | sort | uniq)" \
+		--local-port-list "$(config_foreach get_local_port_list groups)" \
+		--bypassed-iplist-file "$rules_wan_bp_list" \
+		--bypassed-iplist "$rules_wan_bp_ips" \
+		--forwarded-iplist-file "$rules_wan_fw_list" \
+		--forwarded-iplist "$rules_wan_fw_ips" \
+		--ifname-list "$(uci_get_by_type lan lan_ifaces)" \
+		--target "$lan_target" \
+		--output "$output_target" \
+		--lan_hosts "$(config_foreach get_lan_hosts lan_hosts)" \
+		--udp-relay
+}
+
+
+
+rules() {
+	#pidof "$REDIR_BIN" >/dev/null || return 0
+	mkdir -p "/var/etc/${CONF_NAME}"
+	config_load "$CONF_NAME"
+	make_config
+	enable_rules
+}
+
+start_service() {
+	command -v "$REDIR_BIN" >/dev/null || return 1
+	command -v "$TUNNEL_BIN" >/dev/null || return 1
+	command -v "$TCPDNS_BIN" >/dev/null || return 1	
+	config_load "$CONF_NAME"
+	config_foreach start_instance groups
+	make_config
+}
+
+# reload_service() {
+# 	config_load "$CONF_NAME"
+# 	make_config
+# }
+
+# stop_service() {
+
+# }
+
+service_triggers() {
+	procd_add_reload_trigger $CONF_NAME
+}
+
+

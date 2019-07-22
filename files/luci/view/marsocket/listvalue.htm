@@ -1,0 +1,23 @@
+<%#
+	Copyright (C) 2019 marsocket <marsocket@gmail.com>
+	Licensed to the public under the GNU General Public License v3.
+-%>
+
+<%+cbi/valueheader%>
+	<select class="cbi-input-select" <%=
+			attr("data-update", "change") .. 
+			attr("onchange", "on_change_%s('%s', this.value)" % { self.option, section }) ..
+			attr("id", cbid) .. 
+			attr("name", cbid) .. 
+			ifattr(self.size, "size") 
+		%>>
+		<% for i, key in ipairs(self.keylist) do -%>
+			<option <%=
+				attr("id", "%s-%s" % {cbid, key}) .. 
+				attr("value", key) .. 
+				attr("data-index", i) .. 
+				ifattr(tostring(self:cfgvalue(section) or self.default) == key, "selected", "selected") 
+			%>><%=striptags(self.vallist[i])%></option>
+		<%- end %>
+	</select>
+<%+cbi/valuefooter%>

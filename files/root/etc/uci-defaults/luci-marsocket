@@ -1,0 +1,22 @@
+#!/bin/sh
+uci get marsocket.@general[-1] >/dev/null 2>&1 || \
+	uci add marsocket general >/dev/null 2>&1
+uci get marsocket.@lan[-1] >/dev/null 2>&1 || \
+	uci add marsocket lan >/dev/null 2>&1
+uci get marsocket.@local_host[-1] >/dev/null 2>&1 || \
+	uci add marsocket local_host >/dev/null 2>&1
+
+uci commit marsocket
+uci -q batch <<-EOF >/dev/null
+	delete ucitrack.@marsocket[-1]
+	add ucitrack marsocket
+	set ucitrack.@marsocket[-1].init=marsocket
+	commit ucitrack
+	delete firewall.marsocket
+	set firewall.marsocket=include
+	set firewall.marsocket.type=script
+	set firewall.marsocket.path=/var/etc/marsocket/firewall.include
+	set firewall.marsocket.reload=1
+	commit firewall
+EOF
+exit 0

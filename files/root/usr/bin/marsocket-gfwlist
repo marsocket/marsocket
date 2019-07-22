@@ -1,0 +1,89 @@
+#!/bin/sh
+#
+# Copyright (C) 2019 marsocket <marsocket@gmail.com>
+# This is free software, licensed under the GNU General Public License v3.
+
+usage() {
+	cat <<-EOF
+		Usage: "$0" [options]
+		Valid options are:
+	    -f, --gfwlist-file <FILE>
+	                Local gfwlist file by base64
+	                (If not given, will be downloaded online.)
+	    -d, --dns <dns_ip>
+	                DNS IP address for the GfwList Domains (Default: 127.0.0.1)	                
+	    -p, --port <local_dns_port>
+	                Local DNS Port for the GfwList Domains (Default: 5353)
+	    -s, --ipset <ipset_name>
+	                Ipset name for the GfwList domains
+	                (If not given, ipset rules will not be generated.)
+	    -o, --output <FILE>
+	                /path/to/output_filename
+EOF
+	exit $1
+}
+
+get_args(){
+    GFWLIST_BASE64_FILE=''
+    DNS_IP='127.0.0.1'
+    DNS_PORT='5353'
+    IPSET_NAME=''
+    while [ ${#} -gt 0 ]; do
+        case "${1}" in
+            --help | -h | -v)
+                usage 0
+                ;;
+            --gfwlist-file | -f)
+                GFWLIST_BASE64_FILE=$2
+                shift
+                ;;
+            --dns | -d)
+                DNS_IP="$2"
+                shift
+                ;;                
+            --port | -p)
+                DNS_PORT="$2"
+                shift
+                ;;
+            --ipset | -s)
+                IPSET_NAME="$2"
+                shift
+                ;;
+            --output | -o)
+                OUT_FILE="$2"
+                shift
+                ;;
+            *)
+                echo "Invalid argument: $1"
+                usage 1
+                ;;
+        esac
+        shift 1
+    done
+
+    # Check path & file name
+    if [ -z $OUT_FILE ]; then
+        echo 'Error: Please specify the path to the output file(using -o/--output argument).\n'
+        exit 1
+    else
+        if [ -z ${OUT_FILE##*/} ]; then
+            echo 'Error: '$OUT_FILE' is a path, not a file.\n'
+            exit 1
+        else
+            if [ ${OUT_FILE}a != ${OUT_FILE%/*}a ] && [ ! -d ${OUT_FILE%/*} ]; then
+                echo 'Error: Folder do not exist: '${OUT_FILE%/*}'\n'
+                exit 1
+            fi
+        fi
+    fi    
+}
+
+main() {
+    [ -z "$1" ] && usage 0
+    get_args "$@"
+   	/usr/bin/gfwlist2dnsmasq.sh -f "$GFWLIST_BASE64_FILE" -d "$DNS_IP" -p "$DNS_PORT" -s "$IPSET_NAME" -o "$OUT_FILE"
+    [ "$?" == "0" ] || exit 1
+    exit 0
+}
+
+main "$@"
