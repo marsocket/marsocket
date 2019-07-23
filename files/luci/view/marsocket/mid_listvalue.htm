@@ -1,0 +1,18 @@
+<% if self.prefixhtml then %><%=self.prefixhtml%><% end %>
+<select class="cbi-input-select" <%=
+		attr("data-update", "change") .. 
+		attr("id", cbid) .. 
+		attr("name", cbid) .. 
+		ifattr(self.onchange, "onchange", self.onchange) ..
+		ifattr(self.style, "style", self.style) ..
+		ifattr(self.size, "size") 
+	%>>
+	<% for i, key in ipairs(self.keylist) do -%>
+		<option <%=
+			attr("id", "%s-%s" % {cbid, key}) .. 
+			attr("value", key) .. 
+			attr("data-index", i) .. 
+			ifattr(tostring(self:cfgvalue(section) or self.default) == key, "selected", "selected") 
+		%>><%=striptags(self.vallist[i])%></option>
+	<%- end %>
+</select>

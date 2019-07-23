@@ -19,12 +19,19 @@ marsocket=/Users/chengxie/labs/marsocket CD=. filter="*" {
   check.htm
   checkbox.htm
   checkport.htm
+  download_url.htm
   general.htm
   group_details.htm
   groups.htm
+  left_input.htm
+  left_listvalue.htm
   listvalue.htm
+  mid_dvalue.htm
+  mid_listvalue.htm
   node_details.htm
   refresh.htm
+  right_listvalue.htm
+  settings.htm
  }
  i18n=files/luci/i18n filter="*.po" {
   marsocket.zh-cn.po
@@ -45,8 +52,8 @@ marsocket=/Users/chengxie/labs/marsocket CD=. filter="*" {
  }
  bin=files/root/usr/bin {
   gfwlist2dnsmasq.sh
+  marsocket-apnic
   marsocket-check
-  marsocket-countryips
   marsocket-gfwlist
   marsocket-rules
  }

@@ -36,7 +36,8 @@ function index()
 	entry({"admin", "services", "marsocket", "check_groups_status"}, call("check_groups_status")).leaf = true
 	entry({"admin", "services", "marsocket", "get_groups_nodelist"}, call("get_groups_nodelist")).leaf = true
 	entry({"admin", "services", "marsocket", "switch_groups_nodelist"}, call("switch_groups_nodelist")).leaf = true
-	entry({"admin", "services", "marsocket", "status"}, call("action_status")).leaf = true
+	entry({"admin", "services", "marsocket", "update_data"}, call("update_data")).leaf = true
+
 	entry({"admin", "services", "marsocket", "check"}, call("check_status")).leaf = true
 	entry({"admin", "services", "marsocket", "checkport"}, call("check_port"))
 
@@ -100,17 +101,6 @@ function check_groups_status()
 	luci.http.write_json(status_list)
 end
 
-function action_status()
-	local marsocket = "marsocket"
-	local proxy_list = {}
-	local uci = luci.model.uci.cursor()
-	uci:foreach(marsocket, "groups", function(s)
-		proxy_list[s.redir_port] = server_is_running("ss-redir", s.redir_port)
-	end)
-	luci.http.prepare_content("application/json")
-	luci.http.write_json(proxy_list)
-end
-
 function get_groups_nodelist()
 	local marsocket = "marsocket"
 	local uci = luci.model.uci.cursor()
@@ -123,7 +113,7 @@ function get_groups_nodelist()
 	local ret = {}
 	uci:foreach(marsocket, "groups", function(s)		
 		local list = {}
-		if s.switch_mode == "haproxy" then
+		if s.switch_mode == "balance" then
 			list[#list+1] = { value = "nil", alias = "Not changeable", selected = (s.cur_node == "nil"), idx = #list+1 }			
 		else
 			list[#list+1] = { value = "nil", alias = "Disable", selected = (s.cur_node == "nil"), idx = #list+1 }
@@ -138,7 +128,7 @@ function get_groups_nodelist()
 			end
 		end
 
-		ret[s[".name"]] = { disabled = (s.switch_mode == "haproxy"), list = list }
+		ret[s[".name"]] = list
 	end)
 
 
@@ -161,7 +151,7 @@ function switch_groups_nodelist()
 		end)
 
 		local cur_node = uci:get(marsocket, section, "cur_node")
-		if mode == "haproxy" then
+		if mode == "balance" then
 			list[#list+1] = { value = "nil", alias = "Not changeable", selected = (cur_node == "nil"), idx = #list+1 }
 		else
 			list[#list+1] = { value = "nil", alias = "Disable", selected = (cur_node == "nil"), idx = #list + 1 }
@@ -175,11 +165,29 @@ function switch_groups_nodelist()
 		end
 	end
 
-	local ret = { disabled = (mode == "haproxy"), list = list }
+	local ret = list
 	luci.http.prepare_content("application/json")
 	luci.http.write_json(ret)
 end
 
+function update_data()
+	local marsocket = "marsocket"
+	local set = luci.http.formvalue("set")
+	local ret = 0
+	local filename = "/etc/%s/%s-latest" % { marsocket, set }
+	if set == "gfwlist" then
+		ret = luci.sys.call("marsocket-gfwlist --update --gfwlist-file \"%s\" >> /var/log/update_gfwlist.log 2>&1" % filename)
+	elseif set == "apnic" then
+		ret = luci.sys.call("marsocket-apnic --update --apnic-file \"%s\" >> /var/log/update_apnic.log 2>&1" % filename)
+	end	
+	if ret == 0 then
+		ret = luci.sys.exec("ls -la %s | awk '{ print $6\" \"$7\" \"$8 }'" % filename)
+	else
+		ret = "-1"
+	end
+	luci.http.prepare_content("application/json")
+	luci.http.write_json({ ret = ret })
+end
 
 function print_r ( t )  
     local print_r_cache={}

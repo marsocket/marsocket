@@ -2,11 +2,10 @@
 -- Licensed to the public under the GNU General Public License v3.
 local title = "Marsocket"
 local description = translate("Marsocket is a proxy policy program that provides fine-grained control over access routes through all hosts on the LAN.")
-local m, s, o
 local marsocket = "marsocket"
 local uci = luci.model.uci.cursor()
-local fs = require "nixio.fs"
-local sys = require "luci.sys"
+local m, s, o
+
 local groups = {}
 uci:foreach(marsocket, "groups", function(s)
 	local count = #groups
@@ -106,12 +105,12 @@ o:value("nil", translate("Driect"))
 o:value("use_default_proxy", translate("Use default proxy"))
 for _, v in ipairs(groups) do o:value(v.idx, v.alias) end
 
-o = s:option(DummyValue, "count", translate("Number of domains for gfwlist"))
+o = s:option(DummyValue, "count", translate("Number of domains in gfwlist"))
 o.rawhtml = true
 function o.cfgvalue(self, section)
 	local filename = "/etc/%s/dnsmasq.d/gfwlist.conf" % marsocket
 	if nixio.fs.access(filename) then
-	 	local count = sys.exec("grep 'server=' %s | wc -l" % filename)
+	 	local count = luci.sys.exec("grep 'server=' %s | wc -l" % filename)
 	 	return "<input type='text' class='cbi-input-text' readonly='readonly' value='%s' />" % count
 	end
 	return "<input type='text' class='cbi-input-text' readonly='readonly' value='%s' />" % translate("Not yet counted")
@@ -140,7 +139,7 @@ function o.cfgvalue(self, section)
 	if code then
 		local filename = "/etc/%s/apnic.d/%s.list" % { marsocket, code }
 		if nixio.fs.access(filename) then
-		 	local count = sys.exec("cat %s | wc -l" % filename)
+		 	local count = luci.sys.exec("cat %s | wc -l" % filename)
 		 	return "<input type='text' class='cbi-input-text' readonly='readonly' value='%s' />" % count
 		end
 	end

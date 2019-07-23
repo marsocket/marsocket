@@ -16,18 +16,15 @@ DNSMASQ_CONF="/etc/dnsmasq.conf"
 CONF_NAME="marsocket"
 IPLIST_CONF_PATH="/etc/${CONF_NAME}/apnic.d"
 DNSMASQ_CONF_PATH="/etc/${CONF_NAME}/dnsmasq.d"
-HAPROXY_CONF_PATH="/etc/haproxy"
-APNIC_LATEST_FILE="/etc/${CONF_NAME}/delegated-apnic-latest"
-GFWLIST_FILE="/etc/${CONF_NAME}/gfwlist.txt"
+APNIC_LATEST_FILE="/etc/${CONF_NAME}/apnic-latest"
+GFWLIST_FILE="/etc/${CONF_NAME}/gfwlist-latest"
 GFWLIST_RULES_FILE="${DNSMASQ_CONF_PATH}/gfwlist.conf"
 DNSMASQ_CONF_FILE="${DNSMASQ_CONF_PATH}/${CONF_NAME}.conf"
-HAPROXY_CONF_FILE="${HAPROXY_CONF_PATH}/${CONF_NAME}.cfg"
-#HAPROXY_INIT_FILE="/etc/init.d/haproxy"
 REDIR_BIN="ss-redir"
 TUNNEL_BIN="ss-tunnel"
 TCPDNS_BIN="dns-forwarder"
-COUNTRYIPS_BIN="marsocket-countryips.sh"
-GFWLIST_BIN="marsocket-gfwlist.sh"
+COUNTRYIPS_BIN="marsocket-apnic"
+GFWLIST_BIN="marsocket-gfwlist"
 RULES_BIN="marsocket-rules"
 
 uci_get_by_name() {
@@ -271,13 +268,13 @@ create_gfwlist_conf() {
 	local proxy_group_idx=$(uci_get_by_type $cfg_name proxy_group_idx nil)
 	local dns_port=$(get_dns_port $dns_group_idx)
 	local ipset_name=$(get_ipset_name $proxy_group_idx)
-	$GFWLIST_BIN -f "$GFWLIST_FILE" -p "$dns_port" -s "$ipset_name" -o "$GFWLIST_RULES_FILE" >/dev/null
+	$GFWLIST_BIN --gfwlist-file "$GFWLIST_FILE" --port "$dns_port" --ipset "$ipset_name" --output "$GFWLIST_RULES_FILE" >/dev/null
 }
 
 create_apnic_ips() {
 	local cfg_name=$1 #cfgname of rules_iplist
 	local country=$(uci_get_by_name $cfg_name country)
-	$COUNTRYIPS_BIN -c "$country" -f "$APNIC_LATEST_FILE" -d "$IPLIST_CONF_PATH" >/dev/null
+	$COUNTRYIPS_BIN --code "$country" --apnic-file "$APNIC_LATEST_FILE" --output-path "$IPLIST_CONF_PATH" >/dev/null
 }
 
 add_dnsmasq_rules() {
@@ -310,49 +307,10 @@ create_dnsmasq_conf() {
 	restart_dnsmasq
 }
 
-add_haproxy_rules() {
-	local cfg_name=$1 #cfgname of groups
-	[ "$(uci_get_by_name $cfg_name switch_mode)" == "haproxy" ] || return 0
-	local haproxy_port=$(uci_get_by_name $cfg_name haproxy_port 1234)
-	local nodelist=$(uci_get_by_name $cfg_name nodelist)
-	local node_count=$(echo $nodelist | awk '{ print NF }')
-	[ "$node_count" -ge 1 2>/dev/null ] || return 0
-
-	echo "frontend ${CONF_NAME}-${cfg_name}-frontend" >> "$HAPROXY_CONF_FILE"
-	echo "	bind 127.0.0.1:${haproxy_port}" >> "$HAPROXY_CONF_FILE"
-	echo "	default_backend ${CONF_NAME}-${cfg_name}-backend" >> "$HAPROXY_CONF_FILE"
-	echo "" >> "$HAPROXY_CONF_FILE"
-	echo "backend ${CONF_NAME}-${cfg_name}-backend" >> "$HAPROXY_CONF_FILE"
-	for node_idx in $nodelist; do
-		validate_node $node_idx || continue
-		local server_address=$(get_node_value $node_idx server)
-		local server_port=$(get_node_value $node_idx server_port)
-		echo "	server node_${node_idx} ${server_address}:${server_port} check observe layer4 rise 5 fall 5" >> "$HAPROXY_CONF_FILE"
-	done
-	echo "" >> "$HAPROXY_CONF_FILE"
-}
-
-restart_haproxy() {
-	[ -f "$HAPROXY_INIT_FILE" ] || return 0
-	(ls /etc/rc.d | grep ^S | grep haproxy >/dev/null 2>&1) || return 0
-	/etc/init.d/haproxy restart
-	# if !(grep "\-f ${HAPROXY_CONF_FILE}" "$HAPROXY_INIT_FILE" >/dev/null 2>&1); then
-	# 	echo sed -i "s:-f \$HAPROXY_CONFIG:-f \$HAPROXY_CONFIG -f ${HAPROXY_CONF_FILE}:g" "$HAPROXY_INIT_FILE"
-	# fi
-}
-
-create_haproxy_conf() {
-	mkdir -p "$HAPROXY_CONF_PATH"
-	rm -rf "$HAPROXY_CONF_FILE"
-	config_foreach add_haproxy_rules groups
-	#restart_haproxy
-}
-
 make_config() {
 	mkdir -p "$IPLIST_CONF_PATH"	
 	command -v "$COUNTRYIPS_BIN" >/dev/null && config_foreach create_apnic_ips rules_iplist
 	create_dnsmasq_conf
-	create_haproxy_conf
 }
 
 

@@ -1,8 +1,3 @@
-<%#
-	Copyright (C) 2019 marsocket <marsocket@gmail.com>
-	Licensed to the public under the GNU General Public License v3.
--%>
-
 <% include("cbi/map") %>
 
 <script type="text/javascript">
@@ -23,20 +18,10 @@
 			XHR.get("<%=luci.dispatcher.build_url("admin", "services", "marsocket","get_groups_nodelist")%>", null, 
 				function(x, ret) {
 					for (var k in ret) {
-						var disabled = ret[k].disabled;
 						var switch_mode = document.getElementById("cbid.<%=self.config%>." + k + ".switch_mode");
-						//switch_mode.disabled = disabled;
-						if (disabled) {
-							switch_mode.options.remove(2);
-							switch_mode.options.remove(1);
-							switch_mode.options.remove(0);
-						} else {
-							switch_mode.options.remove(3);
-						}
 						var cur_node = document.getElementById("cbid.<%=self.config%>." + k + ".cur_node");
-						//cur_node.disabled = disabled;
 						cur_node.innerHTML="";
-						var datalist = ret[k].list;
+						var datalist = ret[k];
 						for (var i in datalist) {
 							var data = datalist[i];
 							if (data.alias == "Disable") {
@@ -56,11 +41,9 @@
 	function on_change_switch_mode(section, mode) {
 		XHR.get("<%=luci.dispatcher.build_url("admin", "services", "marsocket","switch_groups_nodelist")%>", 
 			{ section: section, mode: mode }, 
-			function(x, ret) {
+			function(x, datalist) {
 				var element = document.getElementById("cbid.<%=self.config%>." + section + ".cur_node");
-				element.disabled = ret.disabled;
 				element.innerHTML="";
-				var datalist = ret.list;
 				for (var i in datalist) {
 					var data = datalist[i];
 					if (data.alias == "Disable") {

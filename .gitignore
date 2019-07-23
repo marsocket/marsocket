@@ -1,4 +1,5 @@
 .DS_Store
+*.lmo
 cscope.files
 cscope.out
 tags

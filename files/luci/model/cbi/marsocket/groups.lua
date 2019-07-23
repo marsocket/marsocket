@@ -2,9 +2,9 @@
 -- Licensed to the public under the GNU General Public License v3.
 local title = "Marsocket"
 local description = translate("Marsocket is a proxy policy program that provides fine-grained control over access routes through all hosts on the LAN.")
-local m, s, o
 local marsocket = "marsocket"
 local uci = luci.model.uci.cursor()
+local m, s, o
 local nodes = {}
 uci:foreach(marsocket, "nodes", function(s)
 	local count = #nodes+1 --填充下拉列表的假数据, idx下标从1开始, 0留给nil表示disable
@@ -39,11 +39,11 @@ o.rmempty = false
 
 o = s:option(ListValue, "switch_mode", translate("Switch Mode"))
 o.template 	= "marsocket/listvalue"
-o.rmempty = false
+o.rmempty 	= false
 o:value("manual", translate("Manual"))
 o:value("auto", translate("Auto"))
 o:value("fallback", translate("Fallback"))
-o:value("haproxy", translate("Haproxy"))
+o:value("balance", translate("Balance"))
 
 o = s:option(ListValue, "cur_node", translate("Node"))
 o.rmempty = false
@@ -74,8 +74,6 @@ function o_tcpdns_port.cfgvalue(self, section)
 	local v2 = v and ("<BR><span id=\"_status_%s\"></span>" % v) or ""
 	return "%s%s" % { v or translate("Disable"), v2 }
 end
-
---o_haproxy_port = s:option(DummyValue, "haproxy_port", translate("Haproxy"))
 
 return m
 

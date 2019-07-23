@@ -29,11 +29,10 @@
 	}	
 
 	function on_change_switch_mode(section, mode) {
-		get_div("haproxy_port").hidden = (mode != "haproxy");
-		get_div("test_url").hidden = (mode != "auto" && mode != "fallback");
-		get_div("test_interval").hidden = (mode != "auto" && mode != "fallback");
+		get_div("test_url").hidden = (mode == "manual");
+		get_div("test_interval").hidden = (mode == "manual");
 		get_div("test_tolerance").hidden = (mode != "auto");
-		get_div("cur_node").hidden = (mode == "haproxy");
+		get_div("cur_node").hidden = (mode == "balance");
 	}
 
 	function get_div(name) {			

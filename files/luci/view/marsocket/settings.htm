@@ -1,0 +1,17 @@
+<% include("cbi/map") %>
+
+<script type="text/javascript">
+	function update_data(btn, id, dataname) {
+		var inputbox = document.getElementById(id);
+		btn.disabled = true;
+		inputbox.value = "<%:Updating%>...";
+		XHR.get("<%=luci.dispatcher.build_url("admin", "services", "marsocket", "update_data")%>",
+			{ set: dataname },
+			function(x, rv) {
+				inputbox.value = (rv.ret == "-1") ? "<%:updating failed%>." : rv.ret
+				btn.disabled = false;
+			}
+		);
+	}
+</script>
+

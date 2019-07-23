@@ -2,9 +2,9 @@
 -- Licensed to the public under the GNU General Public License v3.
 local title = "Marsocket"
 local description = translate("Marsocket is a proxy policy program that provides fine-grained control over access routes through all hosts on the LAN.")
-local m, s, o
 local marsocket = "marsocket"
 local uci = luci.model.uci.cursor()
+local m, s, o
 local sid = arg[1]
 local groups_alias_set = {}
 local port_set = {}
@@ -173,33 +173,19 @@ end
 
 
 -- [[ node setting ]]--
-o_switch_mode = s:taboption("node", ListValue, "switch_mode", translate("Switch Mode"))
-o_switch_mode.template 	= "marsocket/listvalue"
-o_switch_mode.rmempty 	= false
-o_switch_mode.default 	= "manual"
-o_switch_mode:value("manual", translate("Manual"))
-o_switch_mode:value("auto", translate("Auto"))
-o_switch_mode:value("fallback", translate("Fallback"))
-o_switch_mode:value("haproxy", translate("Haproxy"))
-
-o_haproxy_port = s:taboption("node", Value, "haproxy_port", translate("Local port of Haproxy"))
-o_haproxy_port.rmempty 		= false
-o_haproxy_port.datatype 	= "port"
-o_haproxy_port.placeholder 	= "2001"
-o_haproxy_port.default 		= o_haproxy_port.placeholder
-function o_haproxy_port.validate(self, value)
-	if o_switch_mode:cfgvalue(sid) == "haproxy" then
-		local ret, p = m:check_port_duplicate(value, o_alias:cfgvalue(sid), self.option, self.title)
-		if ret == false then
-			return nil, translate("Duplicate port!") .. "   \"%s\": %s    \"%s - %s: %s\"" % { self.title, value, p.alias, p.title, p.port }
-		end		
-	end
-	return Value.validate(self, value)
-end
-
-o = s:taboption("node", Value, "test_url", translate("Test url"))
+o = s:taboption("node", ListValue, "switch_mode", translate("Switch Mode"))
+o.template 		= "marsocket/listvalue"
 o.rmempty 		= false
-o.placeholder 	= "http://www.google.com/ncr"
+o.default 		= "manual"
+o:value("manual", translate("Manual"))
+o:value("auto", translate("Auto"))
+o:value("fallback", translate("Fallback"))
+o:value("balance", translate("Balance"))
+
+o = s:taboption("node", Value, "test_url", translate("Test URL"))
+o.rmempty 		= false
+o.placeholder	= "http://www.gstatic.com/generate_204"
+--o.placeholder 	= "http://www.google.com/ncr"
 o.default 		= o.placeholder
 
 o = s:taboption("node", Value, "test_interval", translate("Test Interval (minute)"))
@@ -260,9 +246,6 @@ uci:foreach(marsocket, "groups", function(s)
 			}
 	t[#t+1] = { enabled = (s.enable_tcp_dns == "1"), 
 				data = { section = s[".name"], alias = s.alias, port = s.tcp_dns_port, option = o_tcp_dns_port.option, title = o_tcp_dns_port.title }
-			}
-	t[#t+1] = { enabled = (s.switch_mode == "haproxy"), 
-				data = { section = s[".name"], alias = s.alias, port = s.haproxy_port, option = o_haproxy_port.option, title = o_haproxy_port.title }
 			}
 	for _, v in ipairs(t) do
 		if v.enabled == true and v.data.port then

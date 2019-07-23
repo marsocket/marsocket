@@ -1,0 +1,95 @@
+#!/bin/sh
+#
+# Copyright (C) 2019 marsocket <marsocket@gmail.com>
+# This is free software, licensed under the GNU General Public License v3.
+
+usage() {
+	cat <<-EOF
+		Usage: "$0" [options]
+		Valid options are:
+            -h, --help    Show this help message and exit
+            -c, --code <CODE>
+                          Code of country
+            -f, --apnic-file <FILE>
+                          Filename of apnic-latest
+            -o, --output-path <PATH>
+                          Path of output listfile
+            --update      Update gfwlist from github.com. 
+                          --apnic-file is a required parameter.
+EOF
+	exit $1
+}
+
+get_args() {
+	UPDATE=""
+	CODE=""
+	APNIC_FILE=""
+	OUTPUT_PATH=""
+    while [ ${#} -gt 0 ]; do
+        case "${1}" in
+            --help | -h | -v)
+                usage 0
+                ;;
+			--update)
+				UPDATE="1"
+				;;
+            --apnic-file | -f)
+                APNIC_FILE=$2
+                shift
+                ;;
+            --code | -c)
+                CODE="$2"
+                shift
+                ;;                
+            --output-path | -o)
+                OUTPUT_PATH="$2"
+                shift
+                ;;
+            *)
+                echo "Invalid argument: $1"
+                usage 1
+                ;;
+        esac
+        shift 1
+    done
+
+	if [ "$UPDATE" = "1" ]; then
+		if [ -z "$APNIC_FILE" ]; then
+			local logtime=$(date "+%Y-%m-%d")
+			echo '['$logtime'] Error: Update IP addresses database from apnic. --apnic-file is a required parameter.\n'
+			exit 1
+		fi
+	else 
+		[ -n "$CODE" ] || usage 1
+		[ -f "$APNIC_FILE" ] || usage 1
+		[ -d "$OUTPUT_PATH" ] || usage 1
+	fi
+}
+
+main() {
+    [ -z "$1" ] && usage 0
+    get_args "$@"
+	local logtime=$(date "+%Y-%m-%d")
+	if [ "$UPDATE" = "1" ]; then
+		local tmpfile="/tmp/apnic.${logtime}"
+		local url="http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest"
+		echo '['$logtime'] Updating IP addresses database from apnic ...'
+		curl -s -L --insecure -o $tmpfile $url
+		if [ $? -ne 0 ]; then
+			echo '['$logtime'] Updating failed.'
+			exit 1	
+		fi
+		mv "$tmpfile" "$APNIC_FILE"
+		echo '['$logtime'] Update completed.'
+		exit 0
+	else
+		local filename="${OUTPUT_PATH}/${CODE}.list"
+		local tmpfile="/tmp/${CODE}.list.${logtime}"
+		cat $APNIC_FILE | awk -F\| '/'$CODE'\|ipv4/ { printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > $tmpfile
+	fi
+    [ $? -ne 0 ] || exit 1
+	mv $tmpfile $filename
+	exit 0
+}
+
+main "$@"

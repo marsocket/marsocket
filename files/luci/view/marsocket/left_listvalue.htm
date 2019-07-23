@@ -1,9 +1,10 @@
 <%+cbi/valueheader%>
 	<select class="cbi-input-select" <%=
 			attr("data-update", "change") .. 
-			attr("onchange", "on_change_%s('%s', this.value)" % { self.option, section }) ..
 			attr("id", cbid) .. 
 			attr("name", cbid) .. 
+			ifattr(self.onchange, "onchange", self.onchange) ..
+			ifattr(self.style, "style", self.style) ..
 			ifattr(self.size, "size") 
 		%>>
 		<% for i, key in ipairs(self.keylist) do -%>
@@ -15,4 +16,3 @@
 			%>><%=striptags(self.vallist[i])%></option>
 		<%- end %>
 	</select>
-<%+cbi/valuefooter%>

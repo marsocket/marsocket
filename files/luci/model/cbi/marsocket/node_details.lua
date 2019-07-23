@@ -2,9 +2,9 @@
 -- Licensed to the public under the GNU General Public License v3.
 local title = "Marsocket"
 local description = translate("Marsocket is a proxy policy program that provides fine-grained control over access routes through all hosts on the LAN.")
-local m, s, o
 local marsocket = "marsocket"
 local uci = luci.model.uci.cursor()
+local m, s, o
 local sid = arg[1]
 local nodes_alias_set = {}
 uci:foreach(marsocket, "nodes", function(s)

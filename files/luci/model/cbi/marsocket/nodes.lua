@@ -2,8 +2,8 @@
 -- Licensed to the public under the GNU General Public License v3.
 local title = "Marsocket"
 local description = translate("Marsocket is a proxy policy program that provides fine-grained control over access routes through all hosts on the LAN.")
-local m, s, o
 local marsocket = "marsocket"
+local m, s, o
 
 m = Map(marsocket, title, description)
 
