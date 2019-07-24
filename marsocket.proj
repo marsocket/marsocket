@@ -37,17 +37,14 @@ marsocket=/Users/chengxie/labs/marsocket CD=. filter="*" {
   marsocket.zh-cn.po
  }
  etc=files/root/etc {
-  config=config {
-   marsocket
-  }
   init.d=init.d {
    marsocket
   }
-  marsocket=marsocket {
-   delegated-apnic-latest
-  }
   uci-defaults=uci-defaults {
    luci-marsocket
+  }
+  config=config {
+   marsocket
   }
  }
  bin=files/root/usr/bin {

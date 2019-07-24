@@ -99,10 +99,7 @@ o.datatype 		= "range(296,9200)"
 o.placeholder 	= "1492"
 o.default 		= o.placeholder
 
-o = s:taboption("redir", Flag, "enable_reuse_port", translate("Enable reuse port"), translate("Need to enable sysctl net.ipv4.tcp_tw_reuse=1"))
-o.template 		= "marsocket/checkbox"
-o.rmempty 		= false
-
+--Need to enable sysctl net.ipv4.tcp_tw_reuse=1
 o = s:taboption("redir", Value, "reuse_port_count", translate("Number of processes"), 
 	translate("Number of processes that reuse ports. <BR>If you want to maximize the performance as instantiate up to core_count + 1. \
 		<BR>For example, you can run set is 3 ... instances while your device has 2 cores. \

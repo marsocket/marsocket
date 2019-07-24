@@ -18,7 +18,7 @@ usage() {
             -s, --ipset <ipset_name>
                           Ipset name for the GfwList domains
                           (If not given, ipset rules will not be generated.)
-            -o, --output <FILE> 
+            -o, --output-file <FILE> 
                           /path/to/output_filename
             --update      Update gfwlist from github.com.
                           --gfwlist-file is a required parameter.
@@ -56,7 +56,7 @@ get_args() {
                 IPSET_NAME="$2"
                 shift
                 ;;
-            --output | -o)
+            --output-file | -o)
                 OUT_FILE="$2"
                 shift
                 ;;
@@ -107,8 +107,12 @@ main() {
 			echo '['$logtime'] Updating failed.'
 			exit 1	
 		fi
-		mv "$tmpfile" "$GFWLIST_BASE64_FILE"
-		echo '['$logtime'] Update completed.'
+		for f in $(ls ${GFWLIST_BASE64_FILE}.* 2>/dev/null); do	
+			[ -f "$f" ] && rm "$f"
+		done
+		local md5=$(md5sum "$tmpfile" | awk '{ print $1 }')
+		mv "$tmpfile" "${GFWLIST_BASE64_FILE}.${md5}"
+		echo '['$logtime'] Update completed. md5: '$md5
 		exit 0
 	else
    		/usr/bin/gfwlist2dnsmasq.sh -f "$GFWLIST_BASE64_FILE" -d "$DNS_IP" -p "$DNS_PORT" -s "$IPSET_NAME" -o "$OUT_FILE"

@@ -6,10 +6,6 @@
 <% include("cbi/map") %>
 
 <script type="text/javascript">
-	function on_check_enable_reuse_port(section, enabled) {
-		get_div("reuse_port_count").hidden = !enabled
-	}
-
 	function on_check_enable_remote_dns(section, enabled) {
 		var ctrls = [
 			"remote_dns_servers",
@@ -42,7 +38,6 @@
 		return document.getElementById("cbid.<%=self.config%>.<%=self.sid%>." + name);
 	}
 	function init_elements() {
-		on_check_enable_reuse_port("<%=self.sid%>", get_element("enable_reuse_port").checked);
 		on_check_enable_remote_dns("<%=self.sid%>", get_element("enable_remote_dns").checked);
 		on_check_enable_tcp_dns("<%=self.sid%>", get_element("enable_tcp_dns").checked);
 		on_change_switch_mode("<%=self.sid%>", get_element("switch_mode").value);	

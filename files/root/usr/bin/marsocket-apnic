@@ -12,8 +12,8 @@ usage() {
                           Code of country
             -f, --apnic-file <FILE>
                           Filename of apnic-latest
-            -o, --output-path <PATH>
-                          Path of output listfile
+            -o, --output-file <FILE>
+                          Filename of output listfile
             --update      Update gfwlist from github.com. 
                           --apnic-file is a required parameter.
 EOF
@@ -24,7 +24,7 @@ get_args() {
 	UPDATE=""
 	CODE=""
 	APNIC_FILE=""
-	OUTPUT_PATH=""
+	OUTPUT_FILE=""
     while [ ${#} -gt 0 ]; do
         case "${1}" in
             --help | -h | -v)
@@ -41,8 +41,8 @@ get_args() {
                 CODE="$2"
                 shift
                 ;;                
-            --output-path | -o)
-                OUTPUT_PATH="$2"
+            --output-file | -o)
+                OUTPUT_FILE="$2"
                 shift
                 ;;
             *)
@@ -62,7 +62,8 @@ get_args() {
 	else 
 		[ -n "$CODE" ] || usage 1
 		[ -f "$APNIC_FILE" ] || usage 1
-		[ -d "$OUTPUT_PATH" ] || usage 1
+		[ ! -d "$OUTPUT_FILE" ] || usage 1
+		[ -d $(dirname "$OUTPUT_FILE") ] || usage 1
 	fi
 }
 
@@ -79,16 +80,17 @@ main() {
 			echo '['$logtime'] Updating failed.'
 			exit 1	
 		fi
-		mv "$tmpfile" "$APNIC_FILE"
-		echo '['$logtime'] Update completed.'
-		exit 0
+		for f in $(ls ${APNIC_FILE}.* 2>/dev/null); do	
+			[ -f "$f" ] && rm "$f"
+		done
+		local md5=$(md5sum "$tmpfile" | awk '{ print $1 }')
+		mv "$tmpfile" "${APNIC_FILE}.${md5}"
+		echo '['$logtime'] Update completed. md5: '$md5
 	else
-		local filename="${OUTPUT_PATH}/${CODE}.list"
-		local tmpfile="/tmp/${CODE}.list.${logtime}"
-		cat $APNIC_FILE | awk -F\| '/'$CODE'\|ipv4/ { printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > $tmpfile
+		local filename="$OUTPUT_FILE"
+		cat $APNIC_FILE | awk -F\| '/'$CODE'\|ipv4/ { printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > $filename
+		[ $? -ne 0 ] || exit 1
 	fi
-    [ $? -ne 0 ] || exit 1
-	mv $tmpfile $filename
 	exit 0
 }
 
