@@ -136,14 +136,14 @@ o = s:option(DummyValue, "count", translate("Number of IP segment"))
 o.rawhtml = true
 function o.cfgvalue(self, section)
 	local code = o_country:cfgvalue(section)
+	local count = ""
 	if code then
-		local filename = "/etc/%s/apnic.d/%s.list" % { marsocket, code }
-		if nixio.fs.access(filename) then
-		 	local count = luci.sys.exec("cat %s | wc -l" % filename)
-		 	return "<input type='text' class='cbi-input-text' readonly='readonly' value='%s' />" % count
-		end
+		count = luci.sys.exec("filename=$(ls /etc/%s/apnic.d/%s.* 2>/dev/null) && wc -l $filename | awk '{ print $1 }'" % { marsocket, code })
+	end	
+	if count == "" then
+		return "<input type='text' class='cbi-input-text' readonly='readonly' value='%s' />" % translate("Not yet counted")
 	end
-	return "<input type='text' class='cbi-input-text' readonly='readonly' value='%s' />" % translate("Not yet counted")
+	return "<input type='text' class='cbi-input-text' readonly='readonly' value='%s' />" % count
 end
 
 
