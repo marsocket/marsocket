@@ -44,6 +44,7 @@ function index()
 end
 
 function check_status()
+	-- HTTP_CODE=`curl -L -o /dev/null --connect-timeout 10 -s --head -w "%{http_code}" "$1"`
 	local ret = luci.sys.call("/usr/bin/marsocket-check http://www.%s.com" % luci.http.formvalue("set"))
 	luci.http.prepare_content("application/json")
 	luci.http.write_json({ ret = ret })
@@ -175,7 +176,7 @@ function update_data()
 	local set = luci.http.formvalue("set")
 	local ret = 0
 	local filename = "/etc/%s/%s-latest" % { marsocket, set }
-	ret = luci.sys.call("marsocket-%s --update --%s-file \"%s\" >> /var/log/update_%s.log 2>&1" % { set, set, filename, set })
+	ret = luci.sys.call("/etc/init.d/%s auto_update %s" % { marsocket, set })
 	if ret == 0 then
 		ret = luci.sys.exec("ls -la %s.* | awk 'NR==1 { print $6\" \"$7\" \"$8 }'" % filename)
 	else

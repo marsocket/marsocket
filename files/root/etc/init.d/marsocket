@@ -1,37 +1,35 @@
 #!/bin/sh /etc/rc.common
 #
-# Copyright (C) 2014-2017 Jian Chang <aa65535@live.com>
-#
+# Copyright (C) 2019 marsocket <marsocket@gmail.com>
 # This is free software, licensed under the GNU General Public License v3.
-# See /LICENSE for more information.
-#
 
 START=75
 USE_PROCD=1
 #PROCD_DEBUG=1
 
-EXTRA_COMMANDS=rules
-EXTRA_COMMANDS=disable_rules
-EXTRA_COMMANDS=generate_config
+EXTRA_COMMANDS="rules disable_rules generate_config auto_test auto_update"
 
-DNSMASQ_CONF="/etc/dnsmasq.conf"
+REDIR_BIN="ss-redir"
+TUNNEL_BIN="ss-tunnel"
+TCPDNS_BIN="dns-forwarder"
+APNIC_BIN="marsocket-apnic"
+GFWLIST_BIN="marsocket-gfwlist"
+RULES_BIN="marsocket-rules"
 CONF_NAME="marsocket"
+CRONTABS_CONF="/etc/crontabs/root"
+DNSMASQ_CONF="/etc/dnsmasq.conf"
 IPLIST_CONF_PATH="/etc/${CONF_NAME}/apnic.d"
 DNSMASQ_CONF_PATH="/etc/${CONF_NAME}/dnsmasq.d"
 TEMP_CONF_PATH="/var/etc/${CONF_NAME}"
 APNIC_LATEST_FILE="/etc/${CONF_NAME}/apnic-latest"
 GFWLIST_LATEST_FILE="/etc/${CONF_NAME}/gfwlist-latest"
+APNIC_LATEST_URL="http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest"
+GFWLIST_LATEST_URL="https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"
 GFWLIST_RULES_FILE="${DNSMASQ_CONF_PATH}/gfwlist.conf"
 DNSMASQ_CONF_FILE="${DNSMASQ_CONF_PATH}/${CONF_NAME}.conf"
 TEMP_GFWLIST_RULES_FILE="/tmp/gfwlist.conf.tmp"
 TEMP_DNSMASQ_CONF_FILE="/tmp/${CONF_NAME}.conf.tmp"
-
-REDIR_BIN="ss-redir"
-TUNNEL_BIN="ss-tunnel"
-TCPDNS_BIN="dns-forwarder"
-COUNTRYIPS_BIN="marsocket-apnic"
-GFWLIST_BIN="marsocket-gfwlist"
-RULES_BIN="marsocket-rules"
+DNSMASQ_CONF_ADD_LINE="conf-dir=${DNSMASQ_CONF_PATH}"
 
 uci_get_by_name() {
 	local ret=$(uci get $CONF_NAME.$1.$2 2>/dev/null)
@@ -122,11 +120,13 @@ get_dns_port() {
 	local dns_group_idx=$1
 	local dns_port="53"
 	if [ "$dns_group_idx" != "nil" ]; then
-		if (get_group_bool $dns_group_idx enable_remote_dns); then
-			if (get_group_bool $dns_group_idx enable_tcp_dns); then
-				dns_port=$(get_group_value $dns_group_idx tcp_dns_port)
-			else
-				dns_port=$(get_group_value $dns_group_idx tunnel_port)
+		if (get_group_bool $dns_group_idx enable); then
+			if (get_group_bool $dns_group_idx enable_remote_dns); then
+				if (get_group_bool $dns_group_idx enable_tcp_dns); then
+					dns_port=$(get_group_value $dns_group_idx tcp_dns_port)
+				else
+					dns_port=$(get_group_value $dns_group_idx tunnel_port)
+				fi
 			fi
 		fi
 	fi
@@ -272,7 +272,7 @@ get_md5() {
 create_gfwlist_conf() {
 	local cfg_name=$1
 	local md5=$(get_md5 gfwlist)
-	if [ -n $md5 ]; then
+	if [ -n "$md5" ]; then
 		local dns_group_idx=$(uci_get_by_type $cfg_name dns_group_idx nil)
 		local proxy_group_idx=$(uci_get_by_type $cfg_name proxy_group_idx nil)
 		local dns_port=$(get_dns_port $dns_group_idx)
@@ -284,7 +284,7 @@ create_gfwlist_conf() {
 create_apnic_ips() {
 	local cfg_name=$1 #cfgname of rules_iplist
 	local md5=$(get_md5 apnic)
-	if [ -n $md5 ]; then
+	if [ -n "$md5" ]; then
 		local country=$(uci_get_by_name $cfg_name country)
 		local destfile="${IPLIST_CONF_PATH}/${country}.${md5}"
 		if [ ! -f $destfile ]; then 
@@ -293,7 +293,7 @@ create_apnic_ips() {
 			done
 			echo ${APNIC_LATEST_FILE}.${md5}
 			echo $destfile
-			$COUNTRYIPS_BIN --code "$country" --apnic-file "${APNIC_LATEST_FILE}.${md5}" --output-file "$destfile" >/dev/null
+			$APNIC_BIN --code "$country" --apnic-file "${APNIC_LATEST_FILE}.${md5}" --output-file "$destfile" >/dev/null
 		fi
 	fi
 }
@@ -308,7 +308,7 @@ add_dnsmasq_rules() {
 	echo "server=/${domain}/127.0.0.1#${dns_port}" >> "$filename"
 	if [ "$(uci_get_by_name $cfg_name allow_rebind)" = "1" ]; then
 		local ipset_name=$(get_ipset_name $proxy_group_idx "pol_")
-		echo "ipset=/${domain}/${ipset_name}" >> "$filename"
+		[ -n "$ipset_name" ] && echo "ipset=/${domain}/${ipset_name}" >> "$filename"
 		echo "rebind-domain-ok=/${domain}/" >> "$filename"
 	else
 		local ipset_name=$(get_ipset_name $proxy_group_idx)
@@ -317,7 +317,6 @@ add_dnsmasq_rules() {
 }
 
 restart_dnsmasq() {
-	[ $(grep "conf-dir=${DNSMASQ_CONF_PATH}" "$DNSMASQ_CONF") ] || echo "conf-dir=${DNSMASQ_CONF_PATH}" >> /etc/dnsmasq.conf
 	/etc/init.d/dnsmasq restart	
 }
 
@@ -358,6 +357,7 @@ create_dnsmasq_conf() {
 	compare_md5 $GFWLIST_RULES_FILE $TEMP_GFWLIST_RULES_FILE || ret="1"
 	compare_md5 $DNSMASQ_CONF_FILE $TEMP_DNSMASQ_CONF_FILE || ret="1"
 	if [ "$ret" != "0" ] && [ -n "$by" ]; then
+		grep "$DNSMASQ_CONF_ADD_LINE" "$DNSMASQ_CONF" >/dev/null 2>&1 || echo "$DNSMASQ_CONF_ADD_LINE" >> "$DNSMASQ_CONF"
 		restart_dnsmasq
 	fi
 }
@@ -367,6 +367,7 @@ generate_config() {
 	[ -z "$by" ] && config_load "$CONF_NAME"
 	config_foreach create_apnic_ips rules_iplist
 	create_dnsmasq_conf $by
+	return 0
 }
 
 get_server_ip_list() {
@@ -382,7 +383,7 @@ get_local_port_list() {
 generate_rules_iplist() {
 	local cfg_name=$1 #cfgname of rules_iplist
 	local md5=$(get_md5 apnic)
-	if [ -n $md5 ]; then
+	if [ -n "$md5" ]; then
 		local country=$(uci_get_by_name $cfg_name country)
 		local proxy_group_idx=$(uci_get_by_name $cfg_name proxy_group_idx nil)
 		case "$proxy_group_idx" in
@@ -491,12 +492,103 @@ enable_rules() {
 		--output "$output_target" \
 		--lan_hosts "$(config_foreach get_lan_hosts lan_hosts)" \
 		--udp-relay
+
+	return 0
 }
 
 disable_rules() {
 	command -v "$RULES_BIN" >/dev/null && $RULES_BIN --flush
-	rm -f "$DNSMASQ_CONF_PATH"/*
-	restart_dnsmasq
+	local num=$(grep -n "$DNSMASQ_CONF_ADD_LINE" "$DNSMASQ_CONF" | awk -F':' '{ print $1 }')
+	if [ -n "$num" ]; then
+		sed -i "${num}d" "$DNSMASQ_CONF" 
+		restart_dnsmasq
+	fi
+	return 0
+}
+
+auto_test() {
+	local arg=$1
+	case $arg in
+		enable | disable)
+			local num=$(grep -n "/etc/init.d/${CONF_NAME} auto_test" "$CRONTABS_CONF" | awk -F':' '{ print $1 }')
+			if [ -n "$num" ]; then
+				sed -i "${num}d" "$CRONTABS_CONF" 
+			fi
+			[ "$arg" = "enable" ] && echo "* * * * * /etc/init.d/${CONF_NAME} auto_test" >> "$CRONTABS_CONF"
+			return 0
+			;;
+		*)
+			;;
+	esac
+}
+
+update_datafile() {
+	local dataname=$1
+	local logtext=$2
+	local url=""
+	local latest_file=""
+	case $dataname in
+		apnic)
+			url=$APNIC_LATEST_URL
+			latest_file=$APNIC_LATEST_FILE
+			;;
+		gfwlist)
+			url=$GFWLIST_LATEST_URL
+			latest_file=$GFWLIST_LATEST_FILE
+			;;
+		*)
+			return 1
+			;;
+	esac
+	local logtime=""
+	local tmpfile="/tmp/${dataname}-latest.tmp"
+	logtime=$(date "+%Y-%m-%d %H:%M:%S")
+	echo "[${logtime}] ${logtext}"
+	curl -s -L --insecure -o $tmpfile $url
+	if [ $? -ne 0 ]; then
+		logtime=$(date "+%Y-%m-%d %H:%M:%S")
+		echo "[${logtime}] Updating failed."
+		return 1	
+	fi
+	for f in $(ls ${latest_file}.* 2>/dev/null); do	
+		[ -f "$f" ] && rm "$f"
+	done
+	local md5=$(md5sum "$tmpfile" | awk '{ print $1 }')
+	mv "$tmpfile" "${latest_file}.${md5}"
+	logtime=$(date "+%Y-%m-%d %H:%M:%S")
+	echo "[${logtime}] Update completed. md5: ${md5}"
+	return 0	
+}
+
+auto_update() {
+	local arg=$1
+	case $arg in
+		enable | disable)
+			local num=$(grep -n "/etc/init.d/${CONF_NAME} auto_update" "$CRONTABS_CONF" | awk -F':' '{ print $1 }')
+			if [ -n "$num" ]; then
+				sed -i "${num}d" "$CRONTABS_CONF" 
+			fi
+			if [ "$arg" = "enable" ]; then
+				local w=$(uci_get_by_type general auto_update_weekday nil)
+				local h=$(uci_get_by_type general auto_update_hours 4)
+				local m=$(uci_get_by_type general auto_update_minutes 0)
+				[ "$w" = "nil" ] && w="*"
+				local cnf="${m} ${h} * * ${w}"
+				echo "${cnf} /etc/init.d/${CONF_NAME} auto_update" >> "$CRONTABS_CONF"
+			fi
+			return 0
+			;;
+		apnic)
+			update_datafile apnic "Updating IP addresses database from apnic ..." >> /var/log/update_apnic.log 2>&1
+			;;
+		gfwlist)
+			update_datafile gfwlist "Updating gfwlist from github.com ..." >> /var/log/update_gfwlist.log 2>&1
+			;;
+		*)
+			update_datafile apnic "Updating IP addresses database from apnic ..." >> /var/log/update_apnic.log 2>&1
+			update_datafile gfwlist "Updating gfwlist from github.com ..." >> /var/log/update_gfwlist.log 2>&1
+			;;
+	esac
 }
 
 check_depends() {
@@ -505,7 +597,7 @@ check_depends() {
 	command -v "$TCPDNS_BIN" >/dev/null || return 1	
 	command -v "$RULES_BIN" >/dev/null || return 1
 	command -v "$GFWLIST_BIN" >/dev/null || return 1
-	command -v "$COUNTRYIPS_BIN" >/dev/null || return 1
+	command -v "$APNIC_BIN" >/dev/null || return 1
 	mkdir -p "$DNSMASQ_CONF_PATH" "$IPLIST_CONF_PATH" "$TEMP_CONF_PATH"
 	return 0
 }
@@ -514,6 +606,7 @@ rules() {
 	check_depends || return 1
 	config_load "$CONF_NAME"	
 	enable_rules
+	return 0
 }
 
 start_service() {
@@ -521,11 +614,13 @@ start_service() {
 	config_load "$CONF_NAME"
 	config_foreach start_instance groups
 	enable_rules
+	auto_update enable
 	#echo "start_service"
 }
 
 stop_service() {
 	disable_rules
+	auto_update disable
 	#echo "stop_service"
 }
 

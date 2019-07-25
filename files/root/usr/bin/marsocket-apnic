@@ -14,14 +14,11 @@ usage() {
                           Filename of apnic-latest
             -o, --output-file <FILE>
                           Filename of output listfile
-            --update      Update gfwlist from github.com. 
-                          --apnic-file is a required parameter.
 EOF
 	exit $1
 }
 
 get_args() {
-	UPDATE=""
 	CODE=""
 	APNIC_FILE=""
 	OUTPUT_FILE=""
@@ -30,9 +27,6 @@ get_args() {
             --help | -h | -v)
                 usage 0
                 ;;
-			--update)
-				UPDATE="1"
-				;;
             --apnic-file | -f)
                 APNIC_FILE=$2
                 shift
@@ -53,44 +47,17 @@ get_args() {
         shift 1
     done
 
-	if [ "$UPDATE" = "1" ]; then
-		if [ -z "$APNIC_FILE" ]; then
-			local logtime=$(date "+%Y-%m-%d")
-			echo '['$logtime'] Error: Update IP addresses database from apnic. --apnic-file is a required parameter.\n'
-			exit 1
-		fi
-	else 
-		[ -n "$CODE" ] || usage 1
-		[ -f "$APNIC_FILE" ] || usage 1
-		[ ! -d "$OUTPUT_FILE" ] || usage 1
-		[ -d $(dirname "$OUTPUT_FILE") ] || usage 1
-	fi
+	[ -n "$CODE" ] || usage 1
+	[ -f "$APNIC_FILE" ] || usage 1
+	[ ! -d "$OUTPUT_FILE" ] || usage 1
+	[ -d $(dirname "$OUTPUT_FILE") ] || usage 1
 }
 
 main() {
     [ -z "$1" ] && usage 0
     get_args "$@"
-	local logtime=$(date "+%Y-%m-%d")
-	if [ "$UPDATE" = "1" ]; then
-		local tmpfile="/tmp/apnic.${logtime}"
-		local url="http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest"
-		echo '['$logtime'] Updating IP addresses database from apnic ...'
-		curl -s -L --insecure -o $tmpfile $url
-		if [ $? -ne 0 ]; then
-			echo '['$logtime'] Updating failed.'
-			exit 1	
-		fi
-		for f in $(ls ${APNIC_FILE}.* 2>/dev/null); do	
-			[ -f "$f" ] && rm "$f"
-		done
-		local md5=$(md5sum "$tmpfile" | awk '{ print $1 }')
-		mv "$tmpfile" "${APNIC_FILE}.${md5}"
-		echo '['$logtime'] Update completed. md5: '$md5
-	else
-		local filename="$OUTPUT_FILE"
-		cat $APNIC_FILE | awk -F\| '/'$CODE'\|ipv4/ { printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > $filename
-		[ $? -ne 0 ] || exit 1
-	fi
+	cat $APNIC_FILE | awk -F\| '/'$CODE'\|ipv4/ { printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > $OUTPUT_FILE
+	[ $? -ne 0 ] || exit 1
 	exit 0
 }
 
