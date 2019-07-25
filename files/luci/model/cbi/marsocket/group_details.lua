@@ -106,7 +106,7 @@ o = s:taboption("redir", Value, "reuse_port_count", translate("Number of process
 		<BR>BUT, it's not necessary except the server side serves hundreds of users."))
 o.rmempty 		= false
 o.datatype 		= "range(1,48)"
-o.placeholder 	= "3"
+o.placeholder 	= "1"
 o.default 		= o.placeholder
 
 

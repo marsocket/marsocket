@@ -19,7 +19,7 @@ usage() {
                           Ipset name for the GfwList domains
                           (If not given, ipset rules will not be generated.)
             -o, --output-file <FILE> 
-                          /path/to/output_filename
+                          Filename of output
 EOF
 	exit $1
 }

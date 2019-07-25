@@ -7,7 +7,7 @@ START=75
 USE_PROCD=1
 #PROCD_DEBUG=1
 
-EXTRA_COMMANDS="rules disable_rules generate_config auto_test auto_update"
+EXTRA_COMMANDS="configure rules auto_test auto_update"
 
 REDIR_BIN="ss-redir"
 TUNNEL_BIN="ss-tunnel"
@@ -30,6 +30,119 @@ DNSMASQ_CONF_FILE="${DNSMASQ_CONF_PATH}/${CONF_NAME}.conf"
 TEMP_GFWLIST_RULES_FILE="/tmp/gfwlist.conf.tmp"
 TEMP_DNSMASQ_CONF_FILE="/tmp/${CONF_NAME}.conf.tmp"
 DNSMASQ_CONF_ADD_LINE="conf-dir=${DNSMASQ_CONF_PATH}"
+
+restart_dnsmasq() {
+	/etc/init.d/dnsmasq restart	
+}
+
+check_depends() {
+	command -v "$REDIR_BIN" >/dev/null || return 1
+	command -v "$TUNNEL_BIN" >/dev/null || return 1
+	command -v "$TCPDNS_BIN" >/dev/null || return 1	
+	command -v "$RULES_BIN" >/dev/null || return 1
+	command -v "$GFWLIST_BIN" >/dev/null || return 1
+	command -v "$APNIC_BIN" >/dev/null || return 1
+	mkdir -p "$DNSMASQ_CONF_PATH" "$IPLIST_CONF_PATH" "$TEMP_CONF_PATH"
+	return 0
+}
+
+update_datafile() {
+	local dataname=$1
+	local logtext=$2
+	local url=""
+	local latest_file=""
+	case $dataname in
+		apnic)
+			url=$APNIC_LATEST_URL
+			latest_file=$APNIC_LATEST_FILE
+			;;
+		gfwlist)
+			url=$GFWLIST_LATEST_URL
+			latest_file=$GFWLIST_LATEST_FILE
+			;;
+		*)
+			return 1
+			;;
+	esac
+	local logtime=""
+	local tmpfile="/tmp/${dataname}-latest.tmp"
+	logtime=$(date "+%Y-%m-%d %H:%M:%S")
+	echo "[${logtime}] ${logtext}"
+	curl -s -L --insecure -o $tmpfile $url
+	if [ $? -ne 0 ]; then
+		logtime=$(date "+%Y-%m-%d %H:%M:%S")
+		echo "[${logtime}] Updating failed."
+		return 1	
+	fi
+	for f in $(ls ${latest_file}.* 2>/dev/null); do	
+		[ -f "$f" ] && rm "$f"
+	done
+	local md5=$(md5sum "$tmpfile" | awk '{ print $1 }')
+	mv "$tmpfile" "${latest_file}.${md5}"
+	logtime=$(date "+%Y-%m-%d %H:%M:%S")
+	echo "[${logtime}] Update completed. md5: ${md5}"
+	return 0	
+}
+
+#$1 curfile
+#$2 newfile
+compare_md5() {
+	local curfile=$1
+	local newfile=$2
+	if [ ! -f $curfile ] && [ -f $newfile ]; then
+		mv $newfile $curfile
+		return 1
+	fi
+	if [ -f $curfile ] && [ ! -f $newfile ]; then
+		rm $curfile
+		return 1
+	fi
+	if [ ! -f $curfile ] && [ ! -f $newfile ]; then
+		return 0
+	fi
+	local cur_md5=$(md5sum "$curfile" | awk '{ print $1 }')
+	local new_md5=$(md5sum "$newfile" | awk '{ print $1 }')
+	if [ "$cur_md5" != "$new_md5" ]; then
+		echo "$cur_md5 $curfile"
+		echo "$new_md5 $newfile"
+		mv $newfile $curfile
+		return 1
+	fi
+	rm $newfile
+	return 0
+}
+
+get_md5() {
+	local dataname=$1
+	case "$dataname" in
+		apnic)
+			echo $(ls ${APNIC_LATEST_FILE}.* 2>/dev/null | awk -F'.' 'NR==1 { print $NF }')
+			;;
+		gfwlist)
+			echo $(ls ${GFWLIST_LATEST_FILE}.* 2>/dev/null | awk -F'.' 'NR==1 { print $NF }')
+			;;
+	esac
+}
+
+#resolve domain to ip
+#$1: domain or hostname
+resolve_server_ip() {
+	local host=$1
+	if echo $host|grep -E "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$">/dev/null; then         
+		hostip="$host"
+	elif  [ "$host" != "${host#*:[0-9a-fA-F]}" ] ;then
+		hostip="$host"
+	else
+		#hostip=$(ping "$host" -s 1 -c 1 | grep PING | cut -d'(' -f 2 | cut -d')' -f1)
+		hostip=$(nslookup "$host" | grep -v \#53 | grep Address | sed s/[[:space:]]//g | awk -F ':' '{ print $2 }')
+		if echo $hostip|grep -E "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$">/dev/null; then
+			hostip="$hostip"
+		else
+			hostip="127.0.0.1"
+		fi
+	fi
+	echo "$hostip"
+}
 
 uci_get_by_name() {
 	local ret=$(uci get $CONF_NAME.$1.$2 2>/dev/null)
@@ -55,26 +168,6 @@ uci_bool_by_name() {
 		1|on|true|yes|enabled) return 0;;
 	esac
 	return 1
-}
-
-#resolve domain to ip
-#$1: domain or hostname
-resolve_server_ip() {
-	local host=$1
-	if echo $host|grep -E "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$">/dev/null; then         
-		hostip="$host"
-	elif  [ "$host" != "${host#*:[0-9a-fA-F]}" ] ;then
-		hostip="$host"
-	else
-		#hostip=$(ping "$host" -s 1 -c 1 | grep PING | cut -d'(' -f 2 | cut -d')' -f1)
-		hostip=$(nslookup "$host" | grep -v \#53 | grep Address | sed s/[[:space:]]//g | awk -F ':' '{ print $2 }')
-		if echo $hostip|grep -E "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$">/dev/null; then
-			hostip="$hostip"
-		else
-			hostip="127.0.0.1"
-		fi
-	fi
-	echo "$hostip"
 }
 
 # $1: index of nodes (e.g.: 0 or 1 or 2)
@@ -157,11 +250,38 @@ get_ipset_name() {
 	echo "$ipset_name"
 }
 
+get_server_ip_list() {
+	local domain=$(uci_get_by_name $1 server)
+	echo $(resolve_server_ip $domain)
+}
+
+get_local_port_list() {
+	local cfg_name=$1 #cfgname of groups
+	uci_bool_by_name $cfg_name enable && echo $(uci_get_by_name $cfg_name redir_port)	
+}
+
+get_lan_hosts() {
+	local cfg_name=$1 #cfgname of lan_hosts
+	uci_bool_by_name $cfg_name enable || return 0
+	local macaddr=$(uci_get_by_name $cfg_name macaddr)
+	local type=$(uci_get_by_name $cfg_name type)
+	local proxy_group_idx=$(uci_get_by_name $cfg_name proxy_group_idx)
+	local port=""
+	if [ $proxy_group_idx = "nil" ]; then
+		port=$RULES_LAN_PORT
+	else
+		port=$(get_proxy_port $proxy_group_idx)
+	fi
+	if [ "$port" = "nil" ]; then
+		echo "b,${macaddr}"
+	else
+		echo "${type},${macaddr},${port}"
+	fi
+}
+
 validate_node() {
 	[ "$(uci get $CONF_NAME.@nodes[$1] 2>/dev/null)" = "nodes" ]
 }
-
-
 
 start_instance() {
 	local cfg_name=$1	#cfgname of groups
@@ -257,20 +377,13 @@ start_instance() {
 	procd_close_instance
 }
 
-get_md5() {
-	local dataname=$1
-	case "$dataname" in
-		apnic)
-			echo $(ls ${APNIC_LATEST_FILE}.* 2>/dev/null | awk -F'.' 'NR==1 { print $NF }')
-			;;
-		gfwlist)
-			echo $(ls ${GFWLIST_LATEST_FILE}.* 2>/dev/null | awk -F'.' 'NR==1 { print $NF }')
-			;;
-	esac
-}
 
-create_gfwlist_conf() {
-	local cfg_name=$1
+
+
+
+
+generate_gfwlist_conf() {
+	local cfg_name=$1 #cfgname is "rules_gfwlist"
 	local md5=$(get_md5 gfwlist)
 	if [ -n "$md5" ]; then
 		local dns_group_idx=$(uci_get_by_type $cfg_name dns_group_idx nil)
@@ -281,7 +394,7 @@ create_gfwlist_conf() {
 	fi
 }
 
-create_apnic_ips() {
+generate_apnic_iplist() {
 	local cfg_name=$1 #cfgname of rules_iplist
 	local md5=$(get_md5 apnic)
 	if [ -n "$md5" ]; then
@@ -316,72 +429,26 @@ add_dnsmasq_rules() {
 	fi
 }
 
-restart_dnsmasq() {
-	/etc/init.d/dnsmasq restart	
-}
-
-#$1 curfile
-#$2 newfile
-compare_md5() {
-	local curfile=$1
-	local newfile=$2
-	if [ ! -f $curfile ] && [ -f $newfile ]; then
-		mv $newfile $curfile
-		return 1
-	fi
-	if [ -f $curfile ] && [ ! -f $newfile ]; then
-		rm $curfile
-		return 1
-	fi
-	if [ ! -f $curfile ] && [ ! -f $newfile ]; then
-		return 0
-	fi
-	local cur_md5=$(md5sum "$curfile" | awk '{ print $1 }')
-	local new_md5=$(md5sum "$newfile" | awk '{ print $1 }')
-	if [ "$cur_md5" != "$new_md5" ]; then
-		echo "$cur_md5 $curfile"
-		echo "$new_md5 $newfile"
-		mv $newfile $curfile
-		return 1
-	fi
-	rm $newfile
-	return 0
-}
-
-create_dnsmasq_conf() {
-	local by=$1
+generate_dnsmasq_conf() {
+	local mode=$1
 	rm -f "$TEMP_GFWLIST_RULES_FILE" "$TEMP_DNSMASQ_CONF_FILE"
-	create_gfwlist_conf rules_gfwlist
+	generate_gfwlist_conf rules_gfwlist
 	config_foreach add_dnsmasq_rules rules_domain
 	local ret="0"
 	compare_md5 $GFWLIST_RULES_FILE $TEMP_GFWLIST_RULES_FILE || ret="1"
 	compare_md5 $DNSMASQ_CONF_FILE $TEMP_DNSMASQ_CONF_FILE || ret="1"
-	if [ "$ret" != "0" ] && [ -n "$by" ]; then
+	if [ "$ret" != "0" ] && [ "$mode" != "debug" ]; then
 		grep "$DNSMASQ_CONF_ADD_LINE" "$DNSMASQ_CONF" >/dev/null 2>&1 || echo "$DNSMASQ_CONF_ADD_LINE" >> "$DNSMASQ_CONF"
 		restart_dnsmasq
 	fi
 }
 
-generate_config() {
-	local by=$1
-	[ -z "$by" ] && config_load "$CONF_NAME"
-	config_foreach create_apnic_ips rules_iplist
-	create_dnsmasq_conf $by
-	return 0
-}
-
-get_server_ip_list() {
-	local domain=$(uci_get_by_name $1 server)
-	echo $(resolve_server_ip $domain)
-}
-
-get_local_port_list() {
-	local cfg_name=$1 #cfgname of groups
-	uci_bool_by_name $cfg_name enable && echo $(uci_get_by_name $cfg_name redir_port)	
-}
-
 generate_rules_iplist() {
 	local cfg_name=$1 #cfgname of rules_iplist
+
+	#checking need generate files ...
+	generate_apnic_iplist $cfg_name	
+
 	local md5=$(get_md5 apnic)
 	if [ -n "$md5" ]; then
 		local country=$(uci_get_by_name $cfg_name country)
@@ -421,37 +488,18 @@ generate_rules_ip() {
 	fi	
 }
 
-get_lan_hosts() {
-	local cfg_name=$1 #cfgname of lan_hosts
-	uci_bool_by_name $cfg_name enable || return 0
-	local macaddr=$(uci_get_by_name $cfg_name macaddr)
-	local type=$(uci_get_by_name $cfg_name type)
-	local proxy_group_idx=$(uci_get_by_name $cfg_name proxy_group_idx)
-	local port=""
-	if [ $proxy_group_idx = "nil" ]; then
-		port=$RULES_LAN_PORT
-	else
-		port=$(get_proxy_port $proxy_group_idx)
-	fi
-	if [ "$port" = "nil" ]; then
-		echo "b,${macaddr}"
-	else
-		echo "${type},${macaddr},${port}"
-	fi
-}
-
 enable_rules() {
 	local local_port_list=$(config_foreach get_local_port_list groups)
 	[ -n "$local_port_list" ] || return 0
 
 	pidof "$REDIR_BIN" >/dev/null || return 0
-	generate_config "rules"
 
 	RULES_WAN_BP_LIST=""
 	RULES_WAN_BP_IPS=""
 	RULES_WAN_FW_LIST=""
 	RULES_WAN_FW_IPS=""
 	RULES_LAN_PORT=""
+
 	config_foreach generate_rules_iplist rules_iplist
 	config_foreach generate_rules_ip rules_ip
 
@@ -493,16 +541,8 @@ enable_rules() {
 		--lan_hosts "$(config_foreach get_lan_hosts lan_hosts)" \
 		--udp-relay
 
-	return 0
-}
-
-disable_rules() {
-	command -v "$RULES_BIN" >/dev/null && $RULES_BIN --flush
-	local num=$(grep -n "$DNSMASQ_CONF_ADD_LINE" "$DNSMASQ_CONF" | awk -F':' '{ print $1 }')
-	if [ -n "$num" ]; then
-		sed -i "${num}d" "$DNSMASQ_CONF" 
-		restart_dnsmasq
-	fi
+	#generate dnsmasq of last
+	generate_dnsmasq_conf
 	return 0
 }
 
@@ -520,44 +560,6 @@ auto_test() {
 		*)
 			;;
 	esac
-}
-
-update_datafile() {
-	local dataname=$1
-	local logtext=$2
-	local url=""
-	local latest_file=""
-	case $dataname in
-		apnic)
-			url=$APNIC_LATEST_URL
-			latest_file=$APNIC_LATEST_FILE
-			;;
-		gfwlist)
-			url=$GFWLIST_LATEST_URL
-			latest_file=$GFWLIST_LATEST_FILE
-			;;
-		*)
-			return 1
-			;;
-	esac
-	local logtime=""
-	local tmpfile="/tmp/${dataname}-latest.tmp"
-	logtime=$(date "+%Y-%m-%d %H:%M:%S")
-	echo "[${logtime}] ${logtext}"
-	curl -s -L --insecure -o $tmpfile $url
-	if [ $? -ne 0 ]; then
-		logtime=$(date "+%Y-%m-%d %H:%M:%S")
-		echo "[${logtime}] Updating failed."
-		return 1	
-	fi
-	for f in $(ls ${latest_file}.* 2>/dev/null); do	
-		[ -f "$f" ] && rm "$f"
-	done
-	local md5=$(md5sum "$tmpfile" | awk '{ print $1 }')
-	mv "$tmpfile" "${latest_file}.${md5}"
-	logtime=$(date "+%Y-%m-%d %H:%M:%S")
-	echo "[${logtime}] Update completed. md5: ${md5}"
-	return 0	
 }
 
 auto_update() {
@@ -591,21 +593,44 @@ auto_update() {
 	esac
 }
 
-check_depends() {
-	command -v "$REDIR_BIN" >/dev/null || return 1
-	command -v "$TUNNEL_BIN" >/dev/null || return 1
-	command -v "$TCPDNS_BIN" >/dev/null || return 1	
-	command -v "$RULES_BIN" >/dev/null || return 1
-	command -v "$GFWLIST_BIN" >/dev/null || return 1
-	command -v "$APNIC_BIN" >/dev/null || return 1
-	mkdir -p "$DNSMASQ_CONF_PATH" "$IPLIST_CONF_PATH" "$TEMP_CONF_PATH"
+configure() {
+	local mode=$1 #can set $1 is "debug"
+	check_depends || return 1
+	config_load "$CONF_NAME"
+	config_foreach generate_apnic_iplist rules_iplist
+	generate_dnsmasq_conf $mode
 	return 0
 }
 
 rules() {
-	check_depends || return 1
-	config_load "$CONF_NAME"	
-	enable_rules
+	local arg=$1
+	case $arg in
+		enable)
+			local mode=$2
+			if [ "$mode" != "start_service" ]; then
+				check_depends || return 1
+				config_load "$CONF_NAME"
+			fi
+			enable_rules
+			;;
+		disable)
+			command -v "$RULES_BIN" >/dev/null && $RULES_BIN --flush
+			local num=$(grep -n "$DNSMASQ_CONF_ADD_LINE" "$DNSMASQ_CONF" | awk -F':' '{ print $1 }')
+			if [ -n "$num" ]; then
+				sed -i "${num}d" "$DNSMASQ_CONF" 
+				restart_dnsmasq
+			fi
+			;;
+		*)
+			cat <<-EOF
+Syntax: /etc/init.d/marsocket rules [command]"
+
+Available commands:
+        enable    Enable iptables rules
+        disable	  Disable iptables rules
+EOF
+			;;
+	esac
 	return 0
 }
 
@@ -613,15 +638,13 @@ start_service() {
 	check_depends || return 1
 	config_load "$CONF_NAME"
 	config_foreach start_instance groups
-	enable_rules
+	rules enable "start_service"
 	auto_update enable
-	#echo "start_service"
 }
 
 stop_service() {
-	disable_rules
+	rules disable
 	auto_update disable
-	#echo "stop_service"
 }
 
 service_triggers() {
