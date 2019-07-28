@@ -25,6 +25,7 @@
 	}	
 
 	function on_change_switch_mode(section, mode) {
+		get_div("test_port").hidden = (mode == "manual");
 		get_div("test_url").hidden = (mode == "manual");
 		get_div("test_interval").hidden = (mode == "manual");
 		get_div("test_tolerance").hidden = (mode != "auto");

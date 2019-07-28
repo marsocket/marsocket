@@ -176,7 +176,7 @@ function update_data()
 	local set = luci.http.formvalue("set")
 	local ret = 0
 	local filename = "/etc/%s/%s-latest" % { marsocket, set }
-	ret = luci.sys.call("/etc/init.d/%s auto_update %s" % { marsocket, set })
+	ret = luci.sys.call("/usr/bin/%s-%s --download --output-file \"/etc/%s/%s-latest\" >> /var/log/update_%s.log 2>&1" % { marsocket, set, marsocket, set, set })
 	if ret == 0 then
 		ret = luci.sys.exec("ls -la %s.* | awk 'NR==1 { print $6\" \"$7\" \"$8 }'" % filename)
 	else

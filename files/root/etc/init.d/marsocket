@@ -11,10 +11,12 @@ EXTRA_COMMANDS="configure rules auto_test auto_update"
 
 REDIR_BIN="ss-redir"
 TUNNEL_BIN="ss-tunnel"
+SOCKS5_BIN="ss-local"
 TCPDNS_BIN="dns-forwarder"
 APNIC_BIN="marsocket-apnic"
 GFWLIST_BIN="marsocket-gfwlist"
 RULES_BIN="marsocket-rules"
+CHECK_BIN="marsocket-check"
 CONF_NAME="marsocket"
 CRONTABS_CONF="/etc/crontabs/root"
 DNSMASQ_CONF="/etc/dnsmasq.conf"
@@ -30,6 +32,7 @@ DNSMASQ_CONF_FILE="${DNSMASQ_CONF_PATH}/${CONF_NAME}.conf"
 TEMP_GFWLIST_RULES_FILE="/tmp/gfwlist.conf.tmp"
 TEMP_DNSMASQ_CONF_FILE="/tmp/${CONF_NAME}.conf.tmp"
 DNSMASQ_CONF_ADD_LINE="conf-dir=${DNSMASQ_CONF_PATH}"
+TEST_SOCKS5_PORT="65535"
 
 restart_dnsmasq() {
 	/etc/init.d/dnsmasq restart	
@@ -42,8 +45,22 @@ check_depends() {
 	command -v "$RULES_BIN" >/dev/null || return 1
 	command -v "$GFWLIST_BIN" >/dev/null || return 1
 	command -v "$APNIC_BIN" >/dev/null || return 1
-	mkdir -p "$DNSMASQ_CONF_PATH" "$IPLIST_CONF_PATH" "$TEMP_CONF_PATH"
+	mkdir -p "$DNSMASQ_CONF_PATH" "$IPLIST_CONF_PATH" "$TEMP_CONF_PATH" "/var/run"
+	local tcp_tw_reuse=$(cat /proc/sys/net/ipv4/tcp_tw_reuse 2>/dev/null)
+	local tcp_fastopen=$(cat /proc/sys/net/ipv4/tcp_fastopen 2>/dev/null)
+	if [ "$tcp_tw_reuse" != "1" ]; then
+		echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse
+	fi
+	if [ "$tcp_fastopen" != "3" ]; then
+		echo 3 > /proc/sys/net/ipv4/tcp_fastopen
+	fi
 	return 0
+}
+
+log() {
+	local logtext=$1
+	local logtime=$(date "+%Y-%m-%d %H:%M:%S")
+	echo "[${logtime}] ${logtext}"
 }
 
 update_datafile() {
@@ -64,14 +81,11 @@ update_datafile() {
 			return 1
 			;;
 	esac
-	local logtime=""
 	local tmpfile="/tmp/${dataname}-latest.tmp"
-	logtime=$(date "+%Y-%m-%d %H:%M:%S")
-	echo "[${logtime}] ${logtext}"
+	log "$logtext"
 	curl -s -L --insecure -o $tmpfile $url
 	if [ $? -ne 0 ]; then
-		logtime=$(date "+%Y-%m-%d %H:%M:%S")
-		echo "[${logtime}] Updating failed."
+		log "Updating failed."
 		return 1	
 	fi
 	for f in $(ls ${latest_file}.* 2>/dev/null); do	
@@ -79,8 +93,7 @@ update_datafile() {
 	done
 	local md5=$(md5sum "$tmpfile" | awk '{ print $1 }')
 	mv "$tmpfile" "${latest_file}.${md5}"
-	logtime=$(date "+%Y-%m-%d %H:%M:%S")
-	echo "[${logtime}] Update completed. md5: ${md5}"
+	log "Update completed. md5: ${md5}"
 	return 0	
 }
 
@@ -144,9 +157,30 @@ resolve_server_ip() {
 	echo "$hostip"
 }
 
+is_number() {
+	expr $1 + 0 >/dev/null 2>&1 && return 0
+	return 1
+}
+
 uci_get_by_name() {
 	local ret=$(uci get $CONF_NAME.$1.$2 2>/dev/null)
 	echo ${ret:=$3}
+}
+
+uci_set_by_name() {
+	uci set $CONF_NAME.$1.$2="$3" 2>/dev/null
+}
+
+uci_delete_by_name() {
+	uci delete $CONF_NAME.$1.$2 2>/dev/null
+}
+
+uci_add_list_by_name() {
+	uci add_list $CONF_NAME.$1.$2="$3" 2>/dev/null
+}
+
+uci_commit() {
+	uci commit $CONF_NAME
 }
 
 uci_get_by_type() {
@@ -285,20 +319,39 @@ validate_node() {
 
 start_instance() {
 	local cfg_name=$1	#cfgname of groups
-	uci_bool_by_name $cfg_name enable || return 0
+	if !(uci_bool_by_name $cfg_name enable); then
+		auto_test disable $cfg_name
+		return 0
+	fi
 	
 	local switch_mode=$(uci_get_by_name $cfg_name switch_mode)
 	local nodelist=$(uci_get_by_name $cfg_name nodelist)
+	local nodelist_size=$(echo $nodelist | awk '{ print NF }')
+	local timeout_list_file="/tmp/${CONF_NAME}.${cfg_name}.timeout_list"
 	if [ "$switch_mode" != "balance" ]; then
 		local cur_node=$(uci_get_by_name $cfg_name cur_node)
-		[ "$cur_node" -ge 1 2>/dev/null ] || return 0
-		[ "$(echo $nodelist | awk '{ print NF }')" -ge "$cur_node" 2>/dev/null ] || return 0
+		if ! [ "$cur_node" -ge 1 2>/dev/null ]; then
+			auto_test disable $cfg_name
+			return 0
+		fi
+		if ! [ "$nodelist_size" -ge "$cur_node" 2>/dev/null ]; then
+			auto_test disable $cfg_name
+			return 0
+		fi
 		nodelist=$(echo $nodelist | awk '{ print $i }' i=$cur_node)
 	else
-		[ "$(echo $nodelist | awk '{ print NF }')" -ge 1 2>/dev/null ] || return 0
+		if ! [ "$nodelist_size" -ge 1 2>/dev/null ]; then
+			auto_test disable $cfg_name
+			return 0
+		fi
+		touch "$timeout_list_file"
 	fi
 
+	[ "$switch_mode" != "manual" ] && auto_test enable $cfg_name
 	for node_idx in $nodelist; do
+		if [ "$switch_mode" = "balance" ]; then
+			grep "$node_idx" "$timeout_list_file" >/dev/null 2>&1 && continue
+		fi
 		validate_node $node_idx || continue
 		local server_address=$(resolve_server_ip $(get_node_value $node_idx server))
 		local server_port=$(get_node_value $node_idx server_port)
@@ -314,13 +367,13 @@ start_instance() {
 			procd_set_param respawn
 			procd_set_param stdout 1
 			procd_set_param stderr 1
+			[ "$switch_mode" = "balance" ] && procd_set_param file "$timeout_list_file"
 			procd_set_param command $REDIR_BIN
 			procd_append_param command "-l" "$(uci_get_by_name $cfg_name redir_port 1234)"
 			procd_append_param command "-s" "$server_address"
 			procd_append_param command "-p" "$server_port"
 			procd_append_param command "-m" "$encrypt_method"
-			if [ -n "$key" ]; then
-				procd_append_param command "--key" "$key"
+			if [ -n "$key" ]; then procd_append_param command "--key" "$key"
 			elif [ -n "$password" ]; then
 				procd_append_param command "-k" "$password"
 			fi
@@ -331,8 +384,8 @@ start_instance() {
 			procd_append_param command "-t" "$timeout"
 			procd_append_param command "-b" "0.0.0.0"		
 			procd_append_param command "--mtu" "$(uci_get_by_name $cfg_name redir_mtu 1492)"
-			procd_append_param command "-u"
 			procd_append_param command "--reuse-port"
+			procd_append_param command "-u"
 			procd_close_instance
 		done
 	done
@@ -358,9 +411,8 @@ start_instance() {
 	get_node_bool $node_idx fast_open && procd_append_param command "--fast-open"
 	get_node_bool $node_idx no_delay && procd_append_param command "--no-delay"
 	procd_append_param command "-t" "$timeout"
-	procd_append_param command "-b" "0.0.0.0"
+	procd_append_param command "-b" "127.0.0.1"
 	procd_append_param command "--mtu" "$(uci_get_by_name $cfg_name tunnel_mtu 1492)"
-	procd_append_param command "-u"
 	procd_append_param command "-L" "$(uci_get_by_name $cfg_name remote_dns_servers 8.8.8.8):$(uci_get_by_name $cfg_name remote_dns_port 53)"
 	procd_append_param command "-u"
 	procd_close_instance
@@ -437,8 +489,11 @@ generate_dnsmasq_conf() {
 	local ret="0"
 	compare_md5 $GFWLIST_RULES_FILE $TEMP_GFWLIST_RULES_FILE || ret="1"
 	compare_md5 $DNSMASQ_CONF_FILE $TEMP_DNSMASQ_CONF_FILE || ret="1"
+	if ! (grep "$DNSMASQ_CONF_ADD_LINE" "$DNSMASQ_CONF" >/dev/null 2>&1); then
+		echo "$DNSMASQ_CONF_ADD_LINE" >> "$DNSMASQ_CONF"
+		ret="1"
+	fi
 	if [ "$ret" != "0" ] && [ "$mode" != "debug" ]; then
-		grep "$DNSMASQ_CONF_ADD_LINE" "$DNSMASQ_CONF" >/dev/null 2>&1 || echo "$DNSMASQ_CONF_ADD_LINE" >> "$DNSMASQ_CONF"
 		restart_dnsmasq
 	fi
 }
@@ -492,8 +547,6 @@ enable_rules() {
 	local local_port_list=$(config_foreach get_local_port_list groups)
 	[ -n "$local_port_list" ] || return 0
 
-	pidof "$REDIR_BIN" >/dev/null || return 0
-
 	RULES_WAN_BP_LIST=""
 	RULES_WAN_BP_IPS=""
 	RULES_WAN_FW_LIST=""
@@ -546,27 +599,55 @@ enable_rules() {
 	return 0
 }
 
+auto_test_enabled() {
+	local cfg_name=$1	#cfgname of groups
+	local cmd="/usr/bin/${CHECK_BIN}"
+	[ -n "$cfg_name" ] && cmd="${cmd} ${cfg_name}"
+	local num=$(grep -n "$cmd" "$CRONTABS_CONF" | awk -F':' '{ print $1 }')
+	if [ -n "$num" ]; then
+		echo "$num"
+		return 0
+	fi
+	return 1
+}
+
 auto_test() {
 	local arg=$1
 	case $arg in
-		enable | disable)
-			local num=$(grep -n "/etc/init.d/${CONF_NAME} auto_test" "$CRONTABS_CONF" | awk -F':' '{ print $1 }')
-			if [ -n "$num" ]; then
-				sed -i "${num}d" "$CRONTABS_CONF" 
+		enable)
+			local cfg_name=$2	#cfgname of groups
+			[ -z "$cfg_name" ] && return 1
+			if !(auto_test_enabled $cfg_name >/dev/null); then
+				local switch_mode=$(uci_get_by_name $cfg_name switch_mode)
+				local test_interval=$(uci_get_by_name $cfg_name test_interval)
+				echo "*/${test_interval} * * * * /usr/bin/${CHECK_BIN} ${cfg_name} >> /var/log/marsocket_check.${cfg_name}.${switch_mode}.log 2>&1" >> "$CRONTABS_CONF"
 			fi
-			[ "$arg" = "enable" ] && echo "* * * * * /etc/init.d/${CONF_NAME} auto_test" >> "$CRONTABS_CONF"
-			return 0
 			;;
-		*)
+		disable)
+			local cfg_name=$2	#cfgname of groups
+			local num=$(auto_test_enabled $cfg_name)
+			local count=0
+			for n in $num; do
+				local c=$(expr $n - $count 2>/dev/null)
+				if (is_number "$c"); then
+					sed -i "${c}d" "$CRONTABS_CONF"
+					count=$(expr $count + 1 2>/dev/null)
+				fi
+			done
 			;;
 	esac
+	return 0
 }
 
 auto_update() {
 	local arg=$1
 	case $arg in
 		enable | disable)
-			local num=$(grep -n "/etc/init.d/${CONF_NAME} auto_update" "$CRONTABS_CONF" | awk -F':' '{ print $1 }')
+			local num=$(grep -n "/usr/bin/${APNIC_BIN} --download" "$CRONTABS_CONF" | awk -F':' '{ print $1 }')
+			if [ -n "$num" ]; then
+				sed -i "${num}d" "$CRONTABS_CONF" 
+			fi
+			local num=$(grep -n "/usr/bin/${GFWLIST_BIN} --download" "$CRONTABS_CONF" | awk -F':' '{ print $1 }')
 			if [ -n "$num" ]; then
 				sed -i "${num}d" "$CRONTABS_CONF" 
 			fi
@@ -576,19 +657,19 @@ auto_update() {
 				local m=$(uci_get_by_type general auto_update_minutes 0)
 				[ "$w" = "nil" ] && w="*"
 				local cnf="${m} ${h} * * ${w}"
-				echo "${cnf} /etc/init.d/${CONF_NAME} auto_update" >> "$CRONTABS_CONF"
+				echo "${cnf} /usr/bin/${APNIC_BIN} --download --output-file \"${APNIC_LATEST_FILE}\" >> /var/log/update_apnic.log 2>&1" >> "$CRONTABS_CONF"
+				echo "${cnf} /usr/bin/${GFWLIST_BIN} --download --output-file \"${GFWLIST_LATEST_FILE}\" >> /var/log/update_gfwlist.log 2>&1" >> "$CRONTABS_CONF"
 			fi
 			return 0
 			;;
-		apnic)
-			update_datafile apnic "Updating IP addresses database from apnic ..." >> /var/log/update_apnic.log 2>&1
-			;;
-		gfwlist)
-			update_datafile gfwlist "Updating gfwlist from github.com ..." >> /var/log/update_gfwlist.log 2>&1
-			;;
 		*)
-			update_datafile apnic "Updating IP addresses database from apnic ..." >> /var/log/update_apnic.log 2>&1
-			update_datafile gfwlist "Updating gfwlist from github.com ..." >> /var/log/update_gfwlist.log 2>&1
+			cat <<-EOF
+Syntax: /etc/init.d/marsocket auto_update [command]"
+
+Available commands:
+        enable    Enable iptables rules
+        disable	  Disable iptables rules
+EOF
 			;;
 	esac
 }
@@ -611,7 +692,7 @@ rules() {
 				check_depends || return 1
 				config_load "$CONF_NAME"
 			fi
-			enable_rules
+			enable_rules 
 			;;
 		disable)
 			command -v "$RULES_BIN" >/dev/null && $RULES_BIN --flush
@@ -636,6 +717,8 @@ EOF
 
 start_service() {
 	check_depends || return 1
+	#disable all auto_test
+	auto_test disable
 	config_load "$CONF_NAME"
 	config_foreach start_instance groups
 	rules enable "start_service"
@@ -643,8 +726,10 @@ start_service() {
 }
 
 stop_service() {
-	rules disable
 	auto_update disable
+	auto_test disable
+	rules disable
+	rm -f /tmp/${CONF_NAME}.*.timeout_list
 }
 
 service_triggers() {

@@ -20,6 +20,9 @@ usage() {
                           (If not given, ipset rules will not be generated.)
             -o, --output-file <FILE> 
                           Filename of output
+                --download
+                          Download gfwlist from github.com.
+                          Need --output-file
 EOF
 	exit $1
 }
@@ -30,11 +33,15 @@ get_args() {
     DNS_PORT="5353"
     IPSET_NAME=""
 	OUTPUT_FILE=""
+	DOWNLOAD=""
     while [ ${#} -gt 0 ]; do
         case "${1}" in
             --help | -h | -v)
                 usage 0
                 ;;
+			--download)
+				DOWNLOAD="1"		
+				;;
             --gfwlist-file | -f)
                 GFWLIST_BASE64_FILE=$2
                 shift
@@ -67,10 +74,41 @@ get_args() {
 	[ -d $(dirname "$OUTPUT_FILE") ] || usage 1
 }
 
+log() {
+	local logtext=$1
+	local logtime=$(date "+%Y-%m-%d %H:%M:%S")
+	echo "[${logtime}] ${logtext}"
+}
+
+download_file() {
+	local url=$1
+	local latest_file=$2
+	local logtext=$3
+	local tmpfile=$(mktemp /tmp/download_file.XXXXXX)
+	log "$logtext"
+	curl -s -L --insecure -o $tmpfile $url
+	if [ $? -ne 0 ]; then
+		log "Updating failed."
+		return 1	
+	fi
+	for f in $(ls ${latest_file}.* 2>/dev/null); do	
+		[ -f "$f" ] && rm "$f"
+	done
+	local md5=$(md5sum "$tmpfile" | awk '{ print $1 }')
+	mv "$tmpfile" "${latest_file}.${md5}"
+	log "Update completed. md5: ${md5}"
+	return 0	
+}
+
 main() {
     [ -z "$1" ] && usage 0
     get_args "$@"
-   	gfwlist2dnsmasq.sh -f "$GFWLIST_BASE64_FILE" -d "$DNS_IP" -p "$DNS_PORT" -s "$IPSET_NAME" -o "$OUTPUT_FILE"
+	if [ -n "$DOWNLOAD" ]; then
+		local url="https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"
+		download_file $url $OUTPUT_FILE "Download gfwlist from github.com ..."
+	else
+		gfwlist2dnsmasq.sh -f "$GFWLIST_BASE64_FILE" -d "$DNS_IP" -p "$DNS_PORT" -s "$IPSET_NAME" -o "$OUTPUT_FILE"
+	fi
     [ "$?" == "0" ] || exit 1
     exit 0
 }

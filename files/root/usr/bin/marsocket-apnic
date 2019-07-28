@@ -14,6 +14,9 @@ usage() {
                           Filename of apnic-latest
             -o, --output-file <FILE>
                           Filename of output listfile
+                --download
+                          Download IP addresses database from apnic.
+                          Need --output-file
 EOF
 	exit $1
 }
@@ -22,11 +25,15 @@ get_args() {
 	CODE=""
 	APNIC_FILE=""
 	OUTPUT_FILE=""
+	DOWNLOAD=""
     while [ ${#} -gt 0 ]; do
         case "${1}" in
             --help | -h | -v)
                 usage 0
                 ;;
+			--download)
+				DOWNLOAD="1"
+				;;
             --apnic-file | -f)
                 APNIC_FILE=$2
                 shift
@@ -46,17 +53,50 @@ get_args() {
         esac
         shift 1
     done
-
-	[ -n "$CODE" ] || usage 1
-	[ -f "$APNIC_FILE" ] || usage 1
+	
+	if [ -z $DOWNLOAD ]; then
+		[ -n "$CODE" ] || usage 1
+		[ -f "$APNIC_FILE" ] || usage 1
+	fi
 	[ ! -d "$OUTPUT_FILE" ] || usage 1
 	[ -d $(dirname "$OUTPUT_FILE") ] || usage 1
+}
+
+log() {
+	local logtext=$1
+	local logtime=$(date "+%Y-%m-%d %H:%M:%S")
+	echo "[${logtime}] ${logtext}"
+}
+
+download_file() {
+	local url=$1
+	local latest_file=$2
+	local logtext=$3
+	local tmpfile=$(mktemp /tmp/download_file.XXXXXX)
+	log "$logtext"
+	curl -s -L --insecure -o $tmpfile $url
+	if [ $? -ne 0 ]; then
+		log "Updating failed."
+		return 1	
+	fi
+	for f in $(ls ${latest_file}.* 2>/dev/null); do	
+		[ -f "$f" ] && rm "$f"
+	done
+	local md5=$(md5sum "$tmpfile" | awk '{ print $1 }')
+	mv "$tmpfile" "${latest_file}.${md5}"
+	log "Update completed. md5: ${md5}"
+	return 0	
 }
 
 main() {
     [ -z "$1" ] && usage 0
     get_args "$@"
-	cat $APNIC_FILE | awk -F\| '/'$CODE'\|ipv4/ { printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > $OUTPUT_FILE
+	if [ -n "$DOWNLOAD" ]; then
+		local url="http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest"
+		download_file $url $OUTPUT_FILE "Download IP addresses database from apnic ..."
+	else
+		cat $APNIC_FILE | awk -F\| '/'$CODE'\|ipv4/ { printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > $OUTPUT_FILE
+	fi
 	[ $? -ne 0 ] || exit 1
 	exit 0
 }
