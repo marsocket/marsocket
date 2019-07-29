@@ -232,18 +232,18 @@ include_output_ac_rules() {
 			$ipt -A MARSOCKET_OUTPUT_DG -p $protocol $EXT_ARGS -j MARSOCKET_WAN_GP_$OUTPUT_AC_PORT
 			;;
 		p|d)
-			$ipt -A MARSOCKET_OUTPUT_DG -p $protocol $EXT_ARGS -j MARSOCKET_OUTPUT_AC			
+			$ipt -A MARSOCKET_OUTPUT_DG -p $protocol $EXT_ARGS -j MARSOCKET_OUTPUT_AC
 			#强制代理规则, 这里因为可能有局域网IP段，所以要放在marsocket_dst_sp之前
 			for port in $LOCAL_PORT_LIST; do
-				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_pol_dns_fw_$port dst -j MARSOCKET_WAN_FW_$OUTPUT_AC_PORT
-				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_pol_fw_$port dst -j MARSOCKET_WAN_FW_$OUTPUT_AC_PORT
+				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_pol_dns_fw_$port dst -j MARSOCKET_WAN_FW_$port
+				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_pol_fw_$port dst -j MARSOCKET_WAN_FW_$port
 			done
 			#绕过本地LAN
 			$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_sp dst -j RETURN
 			#各种强制代理规则
 			for port in $LOCAL_PORT_LIST; do
-				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_dns_fw_$port dst -j MARSOCKET_WAN_FW_$OUTPUT_AC_PORT
-				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_fw_$port dst -j MARSOCKET_WAN_FW_$OUTPUT_AC_PORT
+				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_dns_fw_$port dst -j MARSOCKET_WAN_FW_$port
+				$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_fw_$port dst -j MARSOCKET_WAN_FW_$port
 			done
 			$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_dns_bp dst -j RETURN
 			$ipt -A MARSOCKET_OUTPUT_AC -m set --match-set marsocket_dst_bp dst -j RETURN

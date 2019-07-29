@@ -7,7 +7,7 @@ START=75
 USE_PROCD=1
 #PROCD_DEBUG=1
 
-EXTRA_COMMANDS="configure rules auto_test auto_update"
+EXTRA_COMMANDS="configure rules auto_check auto_update"
 
 REDIR_BIN="ss-redir"
 TUNNEL_BIN="ss-tunnel"
@@ -25,14 +25,11 @@ DNSMASQ_CONF_PATH="/etc/${CONF_NAME}/dnsmasq.d"
 TEMP_CONF_PATH="/var/etc/${CONF_NAME}"
 APNIC_LATEST_FILE="/etc/${CONF_NAME}/apnic-latest"
 GFWLIST_LATEST_FILE="/etc/${CONF_NAME}/gfwlist-latest"
-APNIC_LATEST_URL="http://ftp.apnic.net/apnic/stats/apnic/delegated-apnic-latest"
-GFWLIST_LATEST_URL="https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"
 GFWLIST_RULES_FILE="${DNSMASQ_CONF_PATH}/gfwlist.conf"
 DNSMASQ_CONF_FILE="${DNSMASQ_CONF_PATH}/${CONF_NAME}.conf"
 TEMP_GFWLIST_RULES_FILE="/tmp/gfwlist.conf.tmp"
 TEMP_DNSMASQ_CONF_FILE="/tmp/${CONF_NAME}.conf.tmp"
 DNSMASQ_CONF_ADD_LINE="conf-dir=${DNSMASQ_CONF_PATH}"
-TEST_SOCKS5_PORT="65535"
 
 restart_dnsmasq() {
 	/etc/init.d/dnsmasq restart	
@@ -61,40 +58,6 @@ log() {
 	local logtext=$1
 	local logtime=$(date "+%Y-%m-%d %H:%M:%S")
 	echo "[${logtime}] ${logtext}"
-}
-
-update_datafile() {
-	local dataname=$1
-	local logtext=$2
-	local url=""
-	local latest_file=""
-	case $dataname in
-		apnic)
-			url=$APNIC_LATEST_URL
-			latest_file=$APNIC_LATEST_FILE
-			;;
-		gfwlist)
-			url=$GFWLIST_LATEST_URL
-			latest_file=$GFWLIST_LATEST_FILE
-			;;
-		*)
-			return 1
-			;;
-	esac
-	local tmpfile="/tmp/${dataname}-latest.tmp"
-	log "$logtext"
-	curl -s -L --insecure -o $tmpfile $url
-	if [ $? -ne 0 ]; then
-		log "Updating failed."
-		return 1	
-	fi
-	for f in $(ls ${latest_file}.* 2>/dev/null); do	
-		[ -f "$f" ] && rm "$f"
-	done
-	local md5=$(md5sum "$tmpfile" | awk '{ print $1 }')
-	mv "$tmpfile" "${latest_file}.${md5}"
-	log "Update completed. md5: ${md5}"
-	return 0	
 }
 
 #$1 curfile
@@ -320,7 +283,7 @@ validate_node() {
 start_instance() {
 	local cfg_name=$1	#cfgname of groups
 	if !(uci_bool_by_name $cfg_name enable); then
-		auto_test disable $cfg_name
+		#auto_check disable $cfg_name
 		return 0
 	fi
 	
@@ -331,26 +294,26 @@ start_instance() {
 	if [ "$switch_mode" != "balance" ]; then
 		local cur_node=$(uci_get_by_name $cfg_name cur_node)
 		if ! [ "$cur_node" -ge 1 2>/dev/null ]; then
-			auto_test disable $cfg_name
+			#auto_check disable $cfg_name
 			return 0
 		fi
 		if ! [ "$nodelist_size" -ge "$cur_node" 2>/dev/null ]; then
-			auto_test disable $cfg_name
+			#auto_check disable $cfg_name
 			return 0
 		fi
 		nodelist=$(echo $nodelist | awk '{ print $i }' i=$cur_node)
 	else
 		if ! [ "$nodelist_size" -ge 1 2>/dev/null ]; then
-			auto_test disable $cfg_name
+			#auto_check disable $cfg_name
 			return 0
 		fi
 		touch "$timeout_list_file"
 	fi
 
-	[ "$switch_mode" != "manual" ] && auto_test enable $cfg_name
+	[ "$switch_mode" != "manual" ] && auto_check enable $cfg_name
 	for node_idx in $nodelist; do
 		if [ "$switch_mode" = "balance" ]; then
-			grep "$node_idx" "$timeout_list_file" >/dev/null 2>&1 && continue
+			grep "\<$node_idx\>" "$timeout_list_file" >/dev/null 2>&1 && continue
 		fi
 		validate_node $node_idx || continue
 		local server_address=$(resolve_server_ip $(get_node_value $node_idx server))
@@ -367,7 +330,6 @@ start_instance() {
 			procd_set_param respawn
 			procd_set_param stdout 1
 			procd_set_param stderr 1
-			[ "$switch_mode" = "balance" ] && procd_set_param file "$timeout_list_file"
 			procd_set_param command $REDIR_BIN
 			procd_append_param command "-l" "$(uci_get_by_name $cfg_name redir_port 1234)"
 			procd_append_param command "-s" "$server_address"
@@ -599,7 +561,7 @@ enable_rules() {
 	return 0
 }
 
-auto_test_enabled() {
+auto_check_enabled() {
 	local cfg_name=$1	#cfgname of groups
 	local cmd="/usr/bin/${CHECK_BIN}"
 	[ -n "$cfg_name" ] && cmd="${cmd} ${cfg_name}"
@@ -611,21 +573,21 @@ auto_test_enabled() {
 	return 1
 }
 
-auto_test() {
+auto_check() {
 	local arg=$1
 	case $arg in
 		enable)
 			local cfg_name=$2	#cfgname of groups
 			[ -z "$cfg_name" ] && return 1
-			if !(auto_test_enabled $cfg_name >/dev/null); then
+			if !(auto_check_enabled $cfg_name >/dev/null); then
 				local switch_mode=$(uci_get_by_name $cfg_name switch_mode)
 				local test_interval=$(uci_get_by_name $cfg_name test_interval)
-				echo "*/${test_interval} * * * * /usr/bin/${CHECK_BIN} ${cfg_name} >> /var/log/marsocket_check.${cfg_name}.${switch_mode}.log 2>&1" >> "$CRONTABS_CONF"
+				echo "*/${test_interval} * * * * /usr/bin/${CHECK_BIN} ${cfg_name} >> /var/log/marsocket_check.${cfg_name}.log 2>&1" >> "$CRONTABS_CONF"
 			fi
 			;;
 		disable)
 			local cfg_name=$2	#cfgname of groups
-			local num=$(auto_test_enabled $cfg_name)
+			local num=$(auto_check_enabled $cfg_name)
 			local count=0
 			for n in $num; do
 				local c=$(expr $n - $count 2>/dev/null)
@@ -717,8 +679,8 @@ EOF
 
 start_service() {
 	check_depends || return 1
-	#disable all auto_test
-	auto_test disable
+	#disable all auto_check
+	auto_check disable
 	config_load "$CONF_NAME"
 	config_foreach start_instance groups
 	rules enable "start_service"
@@ -727,7 +689,7 @@ start_service() {
 
 stop_service() {
 	auto_update disable
-	auto_test disable
+	auto_check disable
 	rules disable
 	rm -f /tmp/${CONF_NAME}.*.timeout_list
 }

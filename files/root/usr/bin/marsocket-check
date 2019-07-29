@@ -112,16 +112,16 @@ validate_node() {
 }
 
 reload() {
-	service $CONF_NAME reload
+	/etc/init.d/$CONF_NAME reload
 }
 
-test_group() {
+check_group() {
 	local cfg_name=$1	#cfgname of groups
 	#auto_test_enabled $cfg_name >/dev/null || return 0
 	uci_bool_by_name $cfg_name enable || return 0
 	local switch_mode=$(uci_get_by_name $cfg_name switch_mode)
 	local redir_mtu=$(uci_get_by_name $cfg_name redir_mtu 1492)
-	local test_port=$(uci_get_by_name $cfg_name test_port $TEST_SOCKS5_PORT)
+	local test_port=$(uci_get_by_name $cfg_name test_port 65300)
 	local test_url=$(uci_get_by_name $cfg_name test_url)
 	local nodelist=$(uci_get_by_name $cfg_name nodelist)
 	local nodelist_size=$(echo $nodelist | awk '{ print NF }')
@@ -131,14 +131,14 @@ test_group() {
 		[ "$nodelist_size" -ge "$cur_node" 2>/dev/null ] || return 0
 		[ "$nodelist_size" -ge 2 2>/dev/null ] || return 0
 		local cur_node_idx=$(echo $nodelist | awk '{ print $i }' i=$cur_node)
-		log "starting test ..."
-		local cur=$(test_node $cfg_name $cur_node $cur_node_idx $test_port $redir_mtu $test_url)
+		log "starting test,  mode: ${switch_mode} ..."
+		local cur=$(check_node $cfg_name $cur_node $cur_node_idx $test_port $redir_mtu $test_url)
 		local cur_speed=$(echo $cur | awk -F',' '{ print $1 }')
 		local cur_node_name=$(get_node_value $cur_node_idx alias)
 		log "cur_node:${cur_node_name}, speed:${cur_speed}"
 		case $switch_mode in
 			auto)
-				local sortlist=$(local list_idx=0; for node_idx in $nodelist; do list_idx=$(expr $list_idx + 1); [ "$list_idx" != "$cur_node" ] && test_node $cfg_name $list_idx $node_idx $test_port $redir_mtu $test_url; done | sort)
+				local sortlist=$(local list_idx=0; for node_idx in $nodelist; do list_idx=$(expr $list_idx + 1); [ "$list_idx" != "$cur_node" ] && check_node $cfg_name $list_idx $node_idx $test_port $redir_mtu $test_url; done | sort)
 				for data in $sortlist; do 
 					local idx=$(echo $data | awk -F',' '{ print $2 }')
 					local alias=$(get_node_value $idx alias)
@@ -167,9 +167,9 @@ test_group() {
 				local next_node=$(expr $cur_node + 1 2>/dev/null)
 				[ -z "$next_node" ] && log "finished test." && return 0
 				[ "$next_node" -gt "$nodelist_size" 2>/dev/null ] && next_node="1"
-				while [ "$next_node" != "$cur_node"]; do		
+				while [ "$next_node" != "$cur_node" ]; do		
 					local next_node_idx=$(echo $nodelist | awk '{ print $i }' i=$next_node)
-					local next=$(test_node $cfg_name $next_node $next_node_idx $test_port $redir_mtu $test_url)
+					local next=$(check_node $cfg_name $next_node $next_node_idx $test_port $redir_mtu $test_url)
 					local next_alias=$(get_node_value $next_node_idx alias)
 					local next_speed=$(echo $next | awk -F',' '{ print $1 }')	
 					log "node:${next_alias}, speed:${next_speed}"
@@ -180,7 +180,7 @@ test_group() {
 						uci_set_by_name $cfg_name cur_node "$next_node" && uci_commit && reload
 						break
 					fi
-					next_node=$(expr $cur_node + 1 2>/dev/null)
+					next_node=$(expr $next_node + 1 2>/dev/null)
 					[ -z "$next_node" ] && log "finished test." && return 0
 					[ "$next_node" -gt "$nodelist_size" 2>/dev/null ] && next_node="1"
 				done
@@ -189,8 +189,8 @@ test_group() {
 	else
 		[ "$nodelist_size" -ge 2 2>/dev/null ] || return 0
 		local timeout_list_file="/tmp/${CONF_NAME}.${cfg_name}.timeout_list"
-		log "starting test ..."
-		local retlist=$(local list_idx=0; for node_idx in $nodelist; do list_idx=$(expr $list_idx + 1); test_node $cfg_name $list_idx $node_idx $test_port $redir_mtu $test_url; done)
+		log "starting test,  mode: ${switch_mode} ..."
+		local retlist=$(local list_idx=0; for node_idx in $nodelist; do list_idx=$(expr $list_idx + 1); check_node $cfg_name $list_idx $node_idx $test_port $redir_mtu $test_url; done)
 		for data in $retlist; do 
 			local idx=$(echo $data | awk -F',' '{ print $2 }')
 			local alias=$(get_node_value $idx alias)
@@ -199,7 +199,7 @@ test_group() {
 		done
 		log "finished test."
 		retlist=$(echo "$retlist" | grep "timeout")
-		local timeout_list=$(for ret in $retlist; do echo ret | awk -F',' '{ print $2 }'; done)
+		local timeout_list=$(for ret in $retlist; do echo $ret | awk -F',' '{ print $2 }'; done)
 		#if [ $(auto_test_enabled $cfg_name >/dev/null) ]; then
 			if [ -n "$timeout_list" ]; then
 				echo "$timeout_list" > "$timeout_list_file"
@@ -215,7 +215,7 @@ test_group() {
 	return 0
 }
 
-test_node() {
+check_node() {
 	local cfg_name=$1	#cfgname of groups
 	local list_idx=$2
 	local node_idx=$3
@@ -223,7 +223,7 @@ test_node() {
 	local mtu=$5
 	local url=$6
 	validate_node $node_idx || return 1
-	local curlshow="%{time_starttransfer}"
+	local curlshow="%{http_code},%{time_starttransfer}"
 	local server_address=$(resolve_server_ip $(get_node_value $node_idx server))
 	local server_port=$(get_node_value $node_idx server_port)
 	local password=$(get_node_value $node_idx password)
@@ -243,29 +243,38 @@ test_node() {
 		-b 127.0.0.1 -t 60 -u --reuse-port --fast-open --no-delay \
 		-f "/var/run/${SOCKS5_BIN}-${cfg_name}.pid" >/dev/null 2>&1
 	sleep 1
-	local speed=$(curl -x socks5h://127.0.0.1:$port --insecure --head --connect-timeout 1 -s -L -o /dev/null -w "$curlshow" "$url" 2>/dev/null)
+	local ret_value=""
+	ret_value=$(curl -x socks5h://127.0.0.1:$port --insecure --head --connect-timeout 2 -m 3 -s -L -o /dev/null -w "$curlshow" "$url" 2>/dev/null)
 	local ret="$?"
 	kill -9 $(cat "/var/run/${SOCKS5_BIN}-${cfg_name}.pid" 2>/dev/null) >/dev/null 2>&1
-	if [ "$ret" != "0" ] || [ -z "$speed" ]; then
+	local httpcode=$(echo $ret_value | awk -F',' '{ print $1 }')
+	local speed=$(echo $ret_value | awk -F',' '{ print $2 }')
+	if [ "$ret" != "0" ] || [ $httpcode -eq 0 ] || [ -z "$speed" ]; then 
+		echo "timeout,${node_idx},${list_idx}"
+		return 1
+	fi
+	if [ $httpcode -ne 200 ] && [ $httpcode -ne 204 ]; then
 		echo "timeout,${node_idx},${list_idx}"
 		return 1
 	fi
 	local a=$(echo $speed | awk -F'.' '{ print $1 }')
 	local b=$(echo $speed | awk -F'.' '{ print $2 }')	
-	speed=$([ $a -gt 0 2>/dev/null ] && echo $a${b:0:3} || echo ${b:0:3})
+	speed=$([ $a -gt 0 2>/dev/null ] && echo $a${b:0:3} || echo $(expr ${b:0:3} + 0 2>/dev/null))
 	if [ "$?" != "0" ] || [ -z "$speed" ]; then
 		echo "timeout,${node_idx},${list_idx}"
 		return 1
 	fi
-	echo "${speed},${node_idx},${list_idx}"
+	echo "${speed},${node_idx},${list_idx},${ret}"
 }
 
 main() {
 	command -v "$SOCKS5_BIN" >/dev/null || exit 1
 	local cfg_name=$1	#cfgname of groups
 	[ -z "$cfg_name" ] && exit 1
-	#ps | grep "marsocket-check ${cfg_name}" >/dev/null 2>&1 && exit 0
-	test_group $cfg_name
+	local test_port=$(uci_get_by_name $cfg_name test_port 65300)
+	ps | grep "${SOCKS5_BIN} -l ${test_port}" | grep -v grep >/dev/null 2>&1 && exit 0
+	#ps | grep "marsocket-check ${cfg_name}" | grep -v grep >/dev/null 2>&1 && exit 0
+	check_group $cfg_name
 }
 
 main "$@"
