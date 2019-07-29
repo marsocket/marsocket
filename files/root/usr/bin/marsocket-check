@@ -5,6 +5,8 @@
 
 CONF_NAME="marsocket"
 SOCKS5_BIN="ss-local"
+CHECK_BIN="marsocket-check"
+CRONTABS_CONF="/etc/crontabs/root"
 
 log() {
 	local logtext=$1
@@ -115,9 +117,21 @@ reload() {
 	/etc/init.d/$CONF_NAME reload
 }
 
+auto_check_enabled() {
+	local cfg_name=$1	#cfgname of groups
+	local cmd="/usr/bin/${CHECK_BIN}"
+	[ -n "$cfg_name" ] && cmd="${cmd} ${cfg_name}"
+	local num=$(grep -n "$cmd" "$CRONTABS_CONF" | awk -F':' '{ print $1 }')
+	if [ -n "$num" ]; then
+		echo "$num"
+		return 0
+	fi
+	return 1
+}
+
 check_group() {
 	local cfg_name=$1	#cfgname of groups
-	#auto_test_enabled $cfg_name >/dev/null || return 0
+	auto_check_enabled $cfg_name >/dev/null || return 0
 	uci_bool_by_name $cfg_name enable || return 0
 	local switch_mode=$(uci_get_by_name $cfg_name switch_mode)
 	local redir_mtu=$(uci_get_by_name $cfg_name redir_mtu 1492)
@@ -136,56 +150,33 @@ check_group() {
 		local cur_speed=$(echo $cur | awk -F',' '{ print $1 }')
 		local cur_node_name=$(get_node_value $cur_node_idx alias)
 		log "cur_node:${cur_node_name}, speed:${cur_speed}"
-		case $switch_mode in
-			auto)
-				local sortlist=$(local list_idx=0; for node_idx in $nodelist; do list_idx=$(expr $list_idx + 1); [ "$list_idx" != "$cur_node" ] && check_node $cfg_name $list_idx $node_idx $test_port $redir_mtu $test_url; done | sort)
-				for data in $sortlist; do 
-					local idx=$(echo $data | awk -F',' '{ print $2 }')
-					local alias=$(get_node_value $idx alias)
-					local speed=$(echo $data | awk -F',' '{ print $1 }')
-					log "node:${alias}, speed:${speed}"
-				done
-				local first=$(echo $sortlist | awk '{ print $1 }')
-				local first_speed=$(echo $first | awk -F',' '{ print $1 }')
-				local first_node_idx=$(echo $first | awk -F',' '{ print $2 }')
-				local first_node=$(echo $first | awk -F',' '{ print $3 }')
-				log "finished test."
-				[ "$first_speed" = "timeout" ] && return 0
-				local test_tolerance=$(uci_get_by_name $cfg_name test_tolerance 100)
-				if [ "$cur_speed" = "timeout" ] || [ $(expr $cur_speed - $first_speed 2>/dev/null) -ge $test_tolerance 2>/dev/null ]; then
-					local first_alias=$(get_node_value $first_node_idx alias); 
-					log "node switch to: ${first_alias}"
-					#auto_test_enabled $cfg_name >/dev/null || return 0
-					uci_set_by_name $cfg_name cur_node "$first_node" && uci_commit && reload
-				fi
-				;;
-			fallback)
-				if [ "$cur_speed" != "timeout" ]; then
-					log "finished test."
-					return 0
-				fi
-				local next_node=$(expr $cur_node + 1 2>/dev/null)
-				[ -z "$next_node" ] && log "finished test." && return 0
-				[ "$next_node" -gt "$nodelist_size" 2>/dev/null ] && next_node="1"
-				while [ "$next_node" != "$cur_node" ]; do		
-					local next_node_idx=$(echo $nodelist | awk '{ print $i }' i=$next_node)
-					local next=$(check_node $cfg_name $next_node $next_node_idx $test_port $redir_mtu $test_url)
-					local next_alias=$(get_node_value $next_node_idx alias)
-					local next_speed=$(echo $next | awk -F',' '{ print $1 }')	
-					log "node:${next_alias}, speed:${next_speed}"
-					if [ "$next_speed" != "timeout" ]; then
-						log "finished test."
-						log "node switch to: ${next_alias}"
-						#auto_test_enabled $cfg_name >/dev/null || return 0
-						uci_set_by_name $cfg_name cur_node "$next_node" && uci_commit && reload
-						break
-					fi
-					next_node=$(expr $next_node + 1 2>/dev/null)
-					[ -z "$next_node" ] && log "finished test." && return 0
-					[ "$next_node" -gt "$nodelist_size" 2>/dev/null ] && next_node="1"
-				done
-				;;
-		esac
+		if [ "$switch_mode" = "fallback" ] && [ "$cur_speed" != "timeout" ]; then
+			log "finished test."
+			return 0
+		fi
+		local sortlist=$(local list_idx=0; for node_idx in $nodelist; do list_idx=$(expr $list_idx + 1); [ "$list_idx" != "$cur_node" ] && check_node $cfg_name $list_idx $node_idx $test_port $redir_mtu $test_url; done | sort)
+		for data in $sortlist; do 
+			local idx=$(echo $data | awk -F',' '{ print $2 }')
+			local alias=$(get_node_value $idx alias)
+			local speed=$(echo $data | awk -F',' '{ print $1 }')
+			log "node:${alias}, speed:${speed}"
+		done
+		local first=$(echo $sortlist | awk '{ print $1 }')
+		local first_speed=$(echo $first | awk -F',' '{ print $1 }')
+		local first_node_idx=$(echo $first | awk -F',' '{ print $2 }')
+		local first_node=$(echo $first | awk -F',' '{ print $3 }')
+		log "finished test."
+		[ "$first_speed" = "timeout" ] && return 0
+		if [ "$switch_mode" = "auto" ]; then
+			local test_tolerance=$(uci_get_by_name $cfg_name test_tolerance 100)
+			if [ "$cur_speed" != "timeout" ] && [ $(expr $cur_speed - $first_speed 2>/dev/null) -lt $test_tolerance 2>/dev/null ]; then
+				return 0
+			fi
+		fi
+		auto_check_enabled $cfg_name >/dev/null || return 0
+		local first_alias=$(get_node_value $first_node_idx alias); 
+		log "node switch to: ${first_alias}"
+		uci_set_by_name $cfg_name cur_node "$first_node" && uci_commit && reload
 	else
 		[ "$nodelist_size" -ge 2 2>/dev/null ] || return 0
 		local timeout_list_file="/tmp/${CONF_NAME}.${cfg_name}.timeout_list"
@@ -198,19 +189,18 @@ check_group() {
 			log "node:${alias}, speed:${speed}"
 		done
 		log "finished test."
+		auto_check_enabled $cfg_name >/dev/null || return 0
 		retlist=$(echo "$retlist" | grep "timeout")
 		local timeout_list=$(for ret in $retlist; do echo $ret | awk -F',' '{ print $2 }'; done)
-		#if [ $(auto_test_enabled $cfg_name >/dev/null) ]; then
-			if [ -n "$timeout_list" ]; then
-				echo "$timeout_list" > "$timeout_list_file"
+		if [ -n "$timeout_list" ]; then
+			echo "$timeout_list" > "$timeout_list_file"
+			reload
+		else
+			if [ -s "$timeout_list_file" ]; then
+				> "$timeout_list_file"
 				reload
-			else
-				if [ -s "$timeout_list_file" ]; then
-					> "$timeout_list_file"
-					reload
-				fi
-			fi 
-		#fi	
+			fi
+		fi 
 	fi
 	return 0
 }
@@ -240,7 +230,7 @@ check_node() {
 		-m "$encrypt_method" \
 		--mtu "$mtu" \
 		$k \
-		-b 127.0.0.1 -t 60 -u --reuse-port --fast-open --no-delay \
+		-b 127.0.0.1 -t 60 -u --fast-open --no-delay \
 		-f "/var/run/${SOCKS5_BIN}-${cfg_name}.pid" >/dev/null 2>&1
 	sleep 1
 	local ret_value=""

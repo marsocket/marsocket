@@ -325,7 +325,7 @@ start_instance() {
 		local plugin_opts=$(get_node_value $node_idx plugin_opts)
 		local timeout=$(get_node_value $node_idx timeout 60)
 		local reuse_port_count=$(uci_get_by_name $cfg_name reuse_port_count 1)
-		for _ in `seq 1 $reuse_port_count`; do
+		for _ in $(seq $reuse_port_count); do
 			procd_open_instance
 			procd_set_param respawn
 			procd_set_param stdout 1
