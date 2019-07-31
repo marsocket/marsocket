@@ -14,7 +14,7 @@ function index()
 
 	entry({"admin", "services", "marsocket", "general"}, 
 		cbi("marsocket/general"), 
-		_("General Settings"), 10).leaf = true
+		_("General"), 10).leaf = true
 
  	 entry({"admin", "services", "marsocket", "rules"},
 		cbi("marsocket/rules"),
@@ -22,11 +22,11 @@ function index()
 
 	entry({"admin", "services", "marsocket", "groups"}, 
 		arcombine(cbi("marsocket/groups"), cbi("marsocket/group_details")),
-		_("Groups Manage"), 30).leaf = true
+		_("Groups"), 30).leaf = true
 
 	entry({"admin", "services", "marsocket", "nodes"}, 
 		arcombine(cbi("marsocket/nodes"), cbi("marsocket/node_details")),
-		_("Node Manage"), 40).leaf = true
+		_("Nodes"), 40).leaf = true
 
 	entry({"admin", "services", "marsocket", "settings"},
 		cbi("marsocket/settings"),

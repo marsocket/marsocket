@@ -15,7 +15,7 @@ m = Map(marsocket, title, description)
 m.template = "marsocket/groups"
 
 -- [[ Node List ]]--
-s = m:section(TypedSection, "groups", translate("Groups Manager"))
+s = m:section(TypedSection, "groups", translate("Groups Manage"))
 s.template = "cbi/tblsection"
 s.anonymous = true
 s.addremove = true

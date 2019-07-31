@@ -92,7 +92,7 @@ o = s:option(ListValue, "encrypt_method", translate("Encrypt Method"))
 for _, v in ipairs(encrypt_methods) do o:value(v, v:upper()) end
 o.rmempty = false
 
-o = s:option(Value, "plugin", translate("Plugin Name"))
+o = s:option(Value, "plugin", translate("Plugin"))
 o.placeholder = "eg: obfs-local"
 
 o = s:option(Value, "plugin_opts", translate("Plugin Arguments"))

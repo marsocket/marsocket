@@ -8,7 +8,7 @@ local m, s, o
 m = Map(marsocket, title, description)
 
 -- [[ Nodes Manage ]]--
-s = m:section(TypedSection, "nodes", translate("Nodes Manager"))
+s = m:section(TypedSection, "nodes", translate("Nodes Manage"))
 s.anonymous = true
 s.addremove = true
 s.sortable = true

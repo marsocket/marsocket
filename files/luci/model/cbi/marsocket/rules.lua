@@ -101,7 +101,7 @@ o:value("nil", translate("Disable"))
 for _, v in ipairs(groups) do o:value(v.idx, v.alias) end
 
 o = s:option(ListValue, "proxy_group_idx", translate("Proxy"))
-o:value("nil", translate("Driect"))
+o:value("nil", translate("Direct"))
 o:value("use_default_proxy", translate("Use default proxy"))
 for _, v in ipairs(groups) do o:value(v.idx, v.alias) end
 
@@ -128,7 +128,7 @@ for _, v in ipairs(country_code) do o_country:value(v.code, translate(v.name)) e
 o_country.rmempty = false
 
 o = s:option(ListValue, "proxy_group_idx", translate("Proxy"))
-o:value("nil", translate("Driect"))
+o:value("nil", translate("Direct"))
 o:value("use_default_proxy", translate("Use default proxy"))
 for _, v in ipairs(groups) do o:value(v.idx, v.alias) end
 
@@ -153,13 +153,13 @@ s.addremove = true
 s.anonymous = true
 s.sortable = true
 
-o = s:option(Value, "net", translate("IP Net"))
+o = s:option(Value, "net", translate("IP/Net"))
 o.datatype 	= "ip4addr" --"or(file, '/dev/null')"
 o.placeholder = "0.0.0.0/24"
 o.rmempty = false
 
 o = s:option(ListValue, "proxy_group_idx", translate("Proxy"))
-o:value("nil", translate("Driect"))
+o:value("nil", translate("Direct"))
 o:value("use_default_proxy", translate("Use default proxy"))
 for _, v in ipairs(groups) do o:value(v.idx, v.alias) end
 
@@ -185,7 +185,7 @@ o:value("nil", translate("Disable"))
 for _, v in ipairs(groups) do o:value(v.idx, v.alias) end
 
 o = s:option(ListValue, "proxy_group_idx", translate("Proxy"))
-o:value("nil", translate("Driect"))
+o:value("nil", translate("Direct"))
 o:value("use_default_proxy", translate("Use default proxy"))
 for _, v in ipairs(groups) do o:value(v.idx, v.alias) end
 

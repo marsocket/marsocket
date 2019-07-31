@@ -79,7 +79,7 @@ end
 
 
 -- [[ Local Host ]]--
-s = m:section(TypedSection, "local_host", translate("Local Host"))
+s = m:section(TypedSection, "local_host", translate("Local Host (Router itself)"))
 s.anonymous = true
 o = s:option(ListValue, "type", translate("Outbound mode"))
 o:value("b", translate("Direct"))
