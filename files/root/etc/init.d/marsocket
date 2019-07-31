@@ -374,7 +374,7 @@ start_instance() {
 	get_node_bool $node_idx no_delay && procd_append_param command "--no-delay"
 	procd_append_param command "-t" "$timeout"
 	procd_append_param command "-b" "127.0.0.1"
-	procd_append_param command "--mtu" "$(uci_get_by_name $cfg_name tunnel_mtu 1492)"
+	procd_append_param command "--mtu" "$(uci_get_by_name $cfg_name redir_mtu 1492)"
 	procd_append_param command "-L" "$(uci_get_by_name $cfg_name remote_dns_servers 8.8.8.8):$(uci_get_by_name $cfg_name remote_dns_port 53)"
 	procd_append_param command "-u"
 	procd_close_instance

@@ -60,9 +60,9 @@ end
 s = m:section(NamedSection, sid, "groups", translate("Group Setting"))
 s.anonymous = true
 
-s:tab("redir", translate("Proxy Setting"))
-s:tab("dns", translate("DNS Setting"))
-s:tab("node", translate("Node Setting"))
+s:tab("redir", translate("Proxy"))
+s:tab("dns", translate("DNS"))
+s:tab("node", translate("Node"))
 
 
 
@@ -88,7 +88,7 @@ o_redir_port.default 		= o_redir_port.placeholder
 function o_redir_port.validate(self, value)
 	local ret, p = m:check_port_duplicate(value, o_alias:cfgvalue(sid), self.option, self.title)
 	if ret == false then
-		return nil, translate("Duplicate port!") .. "   \"%s\": %s    \"%s - %s: %s\"" % { self.title, value, p.alias, p.title, p.port }
+		return nil, "%s %s %s %s -> %s:%s" % { translate("Port"), value, translate("existed in"), p.alias, p.title, p.port }
 	end
 	return Value.validate(self, value)
 end
@@ -143,17 +143,11 @@ function o_tunnel_port.validate(self, value)
 	return Value.validate(self, value)
 end
 
-o = s:taboption("dns", Value, "tunnel_mtu", translate("Override MTU of remote DNS"))
-o.rmempty 		= false
-o.datatype 		= "range(296,9200)"
-o.placeholder 	= "1492"
-o.default 		= o.placeholder
-
-o_enable_tcp_dns = s:taboption("dns", Flag, "enable_tcp_dns", translate("Enable tcp remote DNS"))
+o_enable_tcp_dns = s:taboption("dns", Flag, "enable_tcp_dns", translate("Enable TCP remote DNS"))
 o_enable_tcp_dns.template = "marsocket/checkbox"
 o_enable_tcp_dns.rmempty = false
 
-o_tcp_dns_port = s:taboption("dns", Value, "tcp_dns_port", translate("Local port of tcp remote DNS"))
+o_tcp_dns_port = s:taboption("dns", Value, "tcp_dns_port", translate("Local port of TCP remote DNS"))
 o_tcp_dns_port.rmempty 		= false
 o_tcp_dns_port.datatype 	= "port"
 o_tcp_dns_port.placeholder 	= "5353"
@@ -203,7 +197,7 @@ o.default 		= o.placeholder
 o = s:taboption("node", Value, "test_interval", translate("Test Interval (minute)"))
 o.rmempty 		= false
 o.datatype 		= "range(1,60)"
-o.placeholder 	= "1"
+o.placeholder 	= "10"
 o.default 		= o.placeholder
 
 o = s:taboption("node", Value, "test_tolerance", translate("Test Tolerance (ms)"))
@@ -212,13 +206,13 @@ o.datatype 		= "uinteger"
 o.placeholder 	= "100"
 o.default 		= o.placeholder
 
-o = s:taboption("node", ListValue, "cur_node", translate("Node"))
+o = s:taboption("node", ListValue, "cur_node", translate("Current Node"))
 o.rmempty 		= false
 o.default	 	= "nil"
 o:value("nil", translate("Disable"))
 for _, v in ipairs(nodelist) do o:value(v.idx, v.alias) end
 
-o = s:taboption("node", DynamicList, "nodelist", translate("Proxy Node List"))
+o = s:taboption("node", DynamicList, "nodelist", translate("Node List"))
 o.rmempty 		= false
 o.default 		= "nil"
 for _, v in ipairs(nodes) do o:value(v.idx, v.alias) end
