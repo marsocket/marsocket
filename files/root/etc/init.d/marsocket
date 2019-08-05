@@ -20,11 +20,14 @@ CHECK_BIN="marsocket-check"
 CONF_NAME="marsocket"
 CRONTABS_CONF="/etc/crontabs/root"
 DNSMASQ_CONF="/etc/dnsmasq.conf"
-IPLIST_CONF_PATH="/etc/${CONF_NAME}/apnic.d"
-DNSMASQ_CONF_PATH="/etc/${CONF_NAME}/dnsmasq.d"
-TEMP_CONF_PATH="/var/etc/${CONF_NAME}"
-APNIC_LATEST_FILE="/etc/${CONF_NAME}/apnic-latest"
-GFWLIST_LATEST_FILE="/etc/${CONF_NAME}/gfwlist-latest"
+CONF_PATH="/etc/${CONF_NAME}"
+TEMP_CONF_PATH="/var${CONF_PATH}"
+RULES_CMD_ECHO_FILE="${TEMP_CONF_PATH}/rules.cmd"
+CONF_MD5_FILE="${TEMP_CONF_PATH}/config.md5"
+IPLIST_CONF_PATH="${CONF_PATH}/apnic.d"
+DNSMASQ_CONF_PATH="${CONF_PATH}/dnsmasq.d"
+APNIC_LATEST_FILE="${CONF_PATH}/apnic-latest"
+GFWLIST_LATEST_FILE="${CONF_PATH}/gfwlist-latest"
 GFWLIST_RULES_FILE="${DNSMASQ_CONF_PATH}/gfwlist.conf"
 DNSMASQ_CONF_FILE="${DNSMASQ_CONF_PATH}/${CONF_NAME}.conf"
 TEMP_GFWLIST_RULES_FILE="/tmp/gfwlist.conf.tmp"
@@ -248,8 +251,12 @@ get_ipset_name() {
 }
 
 get_server_ip_list() {
-	local domain=$(uci_get_by_name $1 server)
-	echo $(resolve_server_ip $domain)
+	local cfg_name=$1	#cfgname of nodes
+	local domain=$(uci_get_by_name $cfg_name server)
+	local ip=$(resolve_server_ip $domain)
+	#uci_set_by_name $cfg_name "server_ip" "$ip"
+	#echo $(date "+%H:%M:%S.%s") $domain $ip >> /tmp/111
+	echo $ip
 }
 
 get_local_port_list() {
@@ -290,7 +297,7 @@ start_instance() {
 	local switch_mode=$(uci_get_by_name $cfg_name switch_mode)
 	local nodelist=$(uci_get_by_name $cfg_name nodelist)
 	local nodelist_size=$(echo $nodelist | awk '{ print NF }')
-	local timeout_list_file="/tmp/${CONF_NAME}.${cfg_name}.timeout_list"
+	local timeout_list_file="/var/run/${CONF_NAME}.${cfg_name}.timeout_list"
 	if [ "$switch_mode" != "balance" ]; then
 		local cur_node=$(uci_get_by_name $cfg_name cur_node)
 		if ! [ "$cur_node" -ge 1 2>/dev/null ]; then
@@ -444,7 +451,6 @@ add_dnsmasq_rules() {
 }
 
 generate_dnsmasq_conf() {
-	local mode=$1
 	rm -f "$TEMP_GFWLIST_RULES_FILE" "$TEMP_DNSMASQ_CONF_FILE"
 	generate_gfwlist_conf rules_gfwlist
 	config_foreach add_dnsmasq_rules rules_domain
@@ -455,9 +461,7 @@ generate_dnsmasq_conf() {
 		echo "$DNSMASQ_CONF_ADD_LINE" >> "$DNSMASQ_CONF"
 		ret="1"
 	fi
-	if [ "$ret" != "0" ] && [ "$mode" != "debug" ]; then
-		restart_dnsmasq
-	fi
+	[ "$ret" != "0" ] && return 1 || return 0
 }
 
 generate_rules_iplist() {
@@ -543,21 +547,30 @@ enable_rules() {
 		output_target="${localhost_type},${localhost_port}"
 	fi
 
-	$RULES_BIN \
-		--server-ip-list "$(config_foreach get_server_ip_list nodes | sort | uniq)" \
-		--local-port-list "$local_port_list" \
-		--bypassed-iplist-file "$RULES_WAN_BP_LIST" \
-		--bypassed-iplist "$RULES_WAN_BP_IPS" \
-		--forwarded-iplist-file "$RULES_WAN_FW_LIST" \
-		--forwarded-iplist "$RULES_WAN_FW_IPS" \
-		--ifname-list "$(uci_get_by_type lan lan_ifaces)" \
-		--target "$lan_target" \
-		--output "$output_target" \
-		--lan_hosts "$(config_foreach get_lan_hosts lan_hosts)" \
-		--udp-relay
+	local cmd=$(echo $RULES_BIN \
+		--server-ip-list \"$(config_foreach get_server_ip_list nodes | sort | uniq)\" \
+		--local-port-list \"$local_port_list\" \
+		--bypassed-iplist-file \"$RULES_WAN_BP_LIST\" \
+		--bypassed-iplist \"$RULES_WAN_BP_IPS\" \
+		--forwarded-iplist-file \"$RULES_WAN_FW_LIST\" \
+		--forwarded-iplist \"$RULES_WAN_FW_IPS\" \
+		--ifname-list \"$(uci_get_by_type lan lan_ifaces)\" \
+		--target \"$lan_target\" \
+		--output \"$output_target\" \
+		--lan_hosts \"$(config_foreach get_lan_hosts lan_hosts)\" \
+		--udp-relay)
 
-	#generate dnsmasq of last
-	generate_dnsmasq_conf
+	echo "$cmd" > $RULES_CMD_ECHO_FILE
+
+	generate_dnsmasq_conf 
+	local need_restart_dnsmasq="$?"
+
+	local cur_md5=$(find $RULES_CMD_ECHO_FILE $IPLIST_CONF_PATH $DNSMASQ_CONF_PATH -type f -iname \* -exec md5sum $1 \{\} \; 2>/dev/null)
+	if [ "$(cat $CONF_MD5_FILE 2>/dev/null)" != "$cur_md5" ]; then
+		echo "$cur_md5" > $CONF_MD5_FILE
+		echo $cmd | sh
+	fi	
+	[ "$need_restart_dnsmasq" != "0" ] && restart_dnsmasq
 	return 0
 }
 
@@ -629,8 +642,8 @@ auto_update() {
 Syntax: /etc/init.d/marsocket auto_update [command]"
 
 Available commands:
-        enable    Enable iptables rules
-        disable	  Disable iptables rules
+        enable    Enable auto_update
+        disable	  Disable auto_update
 EOF
 			;;
 	esac
@@ -641,7 +654,7 @@ configure() {
 	check_depends || return 1
 	config_load "$CONF_NAME"
 	config_foreach generate_apnic_iplist rules_iplist
-	generate_dnsmasq_conf $mode
+	generate_dnsmasq_conf
 	return 0
 }
 
@@ -658,6 +671,7 @@ rules() {
 			;;
 		disable)
 			command -v "$RULES_BIN" >/dev/null && $RULES_BIN --flush
+			rm -rf $CONF_MD5_FILE $RULES_CMD_ECHO_FILE
 			local num=$(grep -n "$DNSMASQ_CONF_ADD_LINE" "$DNSMASQ_CONF" | awk -F':' '{ print $1 }')
 			if [ -n "$num" ]; then
 				sed -i "${num}d" "$DNSMASQ_CONF" 

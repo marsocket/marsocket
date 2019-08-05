@@ -114,6 +114,10 @@ validate_node() {
 }
 
 reload() {
+	/sbin/reload_config
+}
+
+force_reload() {
 	/etc/init.d/$CONF_NAME reload
 }
 
@@ -168,7 +172,7 @@ check_group() {
 		log "finished test."
 		[ "$first_speed" = "timeout" ] && return 0
 		if [ "$switch_mode" = "auto" ]; then
-			local test_tolerance=$(uci_get_by_name $cfg_name test_tolerance 100)
+			local test_tolerance=$(uci_get_by_name $cfg_name test_tolerance 200)
 			if [ "$cur_speed" != "timeout" ] && [ $(expr $cur_speed - $first_speed 2>/dev/null) -lt $test_tolerance 2>/dev/null ]; then
 				return 0
 			fi
@@ -179,7 +183,7 @@ check_group() {
 		uci_set_by_name $cfg_name cur_node "$first_node" && uci_commit && reload
 	else
 		[ "$nodelist_size" -ge 2 2>/dev/null ] || return 0
-		local timeout_list_file="/tmp/${CONF_NAME}.${cfg_name}.timeout_list"
+		local timeout_list_file="/var/run/${CONF_NAME}.${cfg_name}.timeout_list"
 		log "starting test,  mode: ${switch_mode} ..."
 		local retlist=$(local list_idx=0; for node_idx in $nodelist; do list_idx=$(expr $list_idx + 1); check_node $cfg_name $list_idx $node_idx $test_port $redir_mtu $test_url; done)
 		for data in $retlist; do 
@@ -194,11 +198,11 @@ check_group() {
 		local timeout_list=$(for ret in $retlist; do echo $ret | awk -F',' '{ print $2 }'; done)
 		if [ -n "$timeout_list" ]; then
 			echo "$timeout_list" > "$timeout_list_file"
-			reload
+			force_reload
 		else
 			if [ -s "$timeout_list_file" ]; then
 				> "$timeout_list_file"
-				reload
+				force_reload
 			fi
 		fi 
 	fi
@@ -214,6 +218,7 @@ check_node() {
 	local url=$6
 	validate_node $node_idx || return 1
 	local curlshow="%{http_code},%{time_starttransfer}"
+	#local server_address=$(get_node_value $node_idx server_ip)
 	local server_address=$(resolve_server_ip $(get_node_value $node_idx server))
 	local server_port=$(get_node_value $node_idx server_port)
 	local password=$(get_node_value $node_idx password)
@@ -223,6 +228,7 @@ check_node() {
 	local plugin_opts=$(get_node_value $ode_idx plugin_opts)
 	local timeout=$(get_node_value $node_idx timeout 60)
 	local k="-k ${password}"
+	local pidfile="/var/run/${SOCKS5_BIN}-${cfg_name}.pid"
 	[ -n "$key" ] && k="--key ${key}" 
 	$SOCKS5_BIN -l "$port" \
 		-s "$server_address" \
@@ -230,13 +236,14 @@ check_node() {
 		-m "$encrypt_method" \
 		--mtu "$mtu" \
 		$k \
-		-b 127.0.0.1 -t 60 -u --fast-open --no-delay \
-		-f "/var/run/${SOCKS5_BIN}-${cfg_name}.pid" >/dev/null 2>&1
+		-b 127.0.0.1 -t 2 -u --fast-open --no-delay \
+		-f $pidfile >/dev/null 2>&1
 	sleep 1
 	local ret_value=""
 	ret_value=$(curl -x socks5h://127.0.0.1:$port --insecure --head --connect-timeout 2 -m 3 -s -L -o /dev/null -w "$curlshow" "$url" 2>/dev/null)
 	local ret="$?"
-	kill -9 $(cat "/var/run/${SOCKS5_BIN}-${cfg_name}.pid" 2>/dev/null) >/dev/null 2>&1
+	kill -9 $(cat "$pidfile" 2>/dev/null) >/dev/null 2>&1
+	rm -f $pidfile 
 	local httpcode=$(echo $ret_value | awk -F',' '{ print $1 }')
 	local speed=$(echo $ret_value | awk -F',' '{ print $2 }')
 	if [ "$ret" != "0" ] || [ $httpcode -eq 0 ] || [ -z "$speed" ]; then 
