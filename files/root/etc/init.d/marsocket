@@ -91,18 +91,6 @@ compare_md5() {
 	return 0
 }
 
-get_md5() {
-	local dataname=$1
-	case "$dataname" in
-		apnic)
-			echo $(ls ${APNIC_LATEST_FILE}.* 2>/dev/null | awk -F'.' 'NR==1 { print $NF }')
-			;;
-		gfwlist)
-			echo $(ls ${GFWLIST_LATEST_FILE}.* 2>/dev/null | awk -F'.' 'NR==1 { print $NF }')
-			;;
-	esac
-}
-
 #resolve domain to ip
 #$1: domain or hostname
 resolve_server_ip() {
@@ -405,19 +393,16 @@ start_instance() {
 
 generate_gfwlist_conf() {
 	local cfg_name=$1 #cfgname is "rules_gfwlist"
-	local md5=$(get_md5 gfwlist)
-	if [ -n "$md5" ]; then
-		local dns_group_idx=$(uci_get_by_type $cfg_name dns_group_idx nil)
-		local proxy_group_idx=$(uci_get_by_type $cfg_name proxy_group_idx nil)
-		local dns_port=$(get_dns_port $dns_group_idx)
-		local ipset_name=$(get_ipset_name $proxy_group_idx)
-		$GFWLIST_BIN --gfwlist-file "${GFWLIST_LATEST_FILE}.${md5}" --port "$dns_port" --ipset "$ipset_name" --output-file "$TEMP_GFWLIST_RULES_FILE" >/dev/null
-	fi
+	local dns_group_idx=$(uci_get_by_type $cfg_name dns_group_idx nil)
+	local proxy_group_idx=$(uci_get_by_type $cfg_name proxy_group_idx nil)
+	local dns_port=$(get_dns_port $dns_group_idx)
+	local ipset_name=$(get_ipset_name $proxy_group_idx)
+	$GFWLIST_BIN --gfwlist-file "$GFWLIST_LATEST_FILE" --port "$dns_port" --ipset "$ipset_name" --output-file "$TEMP_GFWLIST_RULES_FILE" >/dev/null 2>&1
 }
 
 generate_apnic_iplist() {
 	local cfg_name=$1 #cfgname of rules_iplist
-	local md5=$(get_md5 apnic)
+	local md5=$(md5sum "$APNIC_LATEST_FILE" 2>/dev/null | awk '{ print $1 }')
 	if [ -n "$md5" ]; then
 		local country=$(uci_get_by_name $cfg_name country)
 		local destfile="${IPLIST_CONF_PATH}/${country}.${md5}"
@@ -425,9 +410,7 @@ generate_apnic_iplist() {
 			for f in $(ls ${IPLIST_CONF_PATH}/${country}.* 2>/dev/null); do	
 				[ -f "$f" ] && rm "$f"
 			done
-			echo ${APNIC_LATEST_FILE}.${md5}
-			echo $destfile
-			$APNIC_BIN --code "$country" --apnic-file "${APNIC_LATEST_FILE}.${md5}" --output-file "$destfile" >/dev/null
+			$APNIC_BIN --code "$country" --apnic-file "$APNIC_LATEST_FILE" --output-file "$destfile" >/dev/null 2>&1
 		fi
 	fi
 }
@@ -470,7 +453,7 @@ generate_rules_iplist() {
 	#checking need generate files ...
 	generate_apnic_iplist $cfg_name	
 
-	local md5=$(get_md5 apnic)
+	local md5=$(md5sum "$APNIC_LATEST_FILE" 2>/dev/null | awk '{ print $1 }')
 	if [ -n "$md5" ]; then
 		local country=$(uci_get_by_name $cfg_name country)
 		local proxy_group_idx=$(uci_get_by_name $cfg_name proxy_group_idx nil)

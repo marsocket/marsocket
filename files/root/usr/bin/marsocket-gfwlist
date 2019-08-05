@@ -91,12 +91,11 @@ download_file() {
 		log "Updating failed."
 		return 1	
 	fi
-	for f in $(ls ${latest_file}.* 2>/dev/null); do	
-		[ -f "$f" ] && rm "$f"
-	done
-	local md5=$(md5sum "$tmpfile" | awk '{ print $1 }')
-	mv "$tmpfile" "${latest_file}.${md5}"
-	log "Update completed. md5: ${md5}"
+	local new_md5=$(md5sum "$tmpfile" 2>/dev/null | awk '{ print $1 }')
+	local old_md5=$(md5sum "$latest_file" 2>/dev/null | awk '{ print $1 }')
+	mv "$tmpfile" "$latest_file"
+	log "Update completed. md5: ${new_md5}"
+	[ "$new_md5" != "$old_md5" ] && /etc/init.d/marsocket reload
 	return 0	
 }
 
