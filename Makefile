@@ -12,8 +12,10 @@ PKG_LICENSE:=GPLv3
 PKG_LICENSE_FILES:=LICENSE
 PKG_MAINTAINER:=marsocket <marsocket@gmail.com>
 
-PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION).tar.gz
-PKG_SOURCE_URL:=https://github.com/shadowsocks/shadowsocks-libev/releases/download/v$(PKG_VERSION)
+SHADOWSOCKS_PKG_NAME:=shadowsocks-libev
+SHADOWSOCKS_PKG_VERSION:=3.3.0
+PKG_SOURCE:=$(SHADOWSOCKS_PKG_NAME)-$(SHADOWSOCKS_PKG_VERSION).tar.gz
+PKG_SOURCE_URL:=https://github.com/shadowsocks/shadowsocks-libev/releases/download/v$(SHADOWSOCKS_PKG_VERSION)
 PKG_HASH:=9732f8b8f02ffeea261bcf15fbf104f826012f74dbee99d016b75f0894a39649
 
 PKG_FIXUP:=autoreconf
