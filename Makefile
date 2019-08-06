@@ -75,8 +75,8 @@ if [ -z "$${IPKG_INSTROOT}" ]; then
 	( . /etc/uci-defaults/luci-$(1) ) && rm -f /etc/uci-defaults/luci-$(1)
 	chmod 755 /etc/init.d/$(1) >/dev/null 2>&1
 	/etc/init.d/$(1) enable >/dev/null 2>&1
-	echo '0 4 * * * /usr/bin/marsocket-apnic --download --output-file "/etc/marsocket/apnic-latest" >> /var/log/update_apnic.log 2>&1' >> /etc/crontabs/root
-	echo '0 4 * * * /usr/bin/marsocket-gfwlist --download --output-file "/etc/marsocket/gfwlist-latest" >> /var/log/update_gfwlist.log 2>&1 >> /etc/crontabs/root
+	echo "0 4 * * * /usr/bin/marsocket-apnic --download --output-file \"/etc/marsocket/apnic-latest\" >> /var/log/update_apnic.log 2>&1" >> /etc/crontabs/root
+	echo "0 4 * * * /usr/bin/marsocket-gfwlist --download --output-file \"/etc/marsocket/gfwlist-latest\" >> /var/log/update_gfwlist.log 2>&1" >> /etc/crontabs/root
 fi
 exit 0
 endef
