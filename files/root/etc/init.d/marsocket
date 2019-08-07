@@ -573,7 +573,7 @@ auto_check_enabled() {
 	local cfg_name=$1	#cfgname of groups
 	local cmd="/usr/bin/${CHECK_BIN}"
 	[ -n "$cfg_name" ] && cmd="${cmd} ${cfg_name}"
-	local num=$(grep -n "$cmd" "$CRONTABS_CONF" | awk -F':' '{ print $1 }')
+	local num=$(grep -n "$cmd" "$CRONTABS_CONF" 2>/dev/null | awk -F':' '{ print $1 }')
 	if [ -n "$num" ]; then
 		echo "$num"
 		return 0
@@ -591,6 +591,7 @@ auto_check() {
 				local switch_mode=$(uci_get_by_name $cfg_name switch_mode)
 				local test_interval=$(uci_get_by_name $cfg_name test_interval)
 				echo "*/${test_interval} * * * * /usr/bin/${CHECK_BIN} ${cfg_name} >> /var/log/marsocket_check.${cfg_name}.log 2>&1" >> "$CRONTABS_CONF"
+				/etc/init.d/cron start
 			fi
 			;;
 		disable)
@@ -622,8 +623,6 @@ auto_update() {
 				sed -i "${num}d" "$CRONTABS_CONF" 
 			fi
 			if [ "$arg" = "enable" ]; then
-				local need_start_crontab="0"
-				[ -f "$CRONTABS_CONF" ] || need_start_crontab="1"
 				local w=$(uci_get_by_type general auto_update_weekday nil)
 				local h=$(uci_get_by_type general auto_update_hours 4)
 				local m=$(uci_get_by_type general auto_update_minutes 0)
@@ -631,9 +630,7 @@ auto_update() {
 				local cnf="${m} ${h} * * ${w}"
 				echo "${cnf} /usr/bin/${APNIC_BIN} --download --output-file \"${APNIC_LATEST_FILE}\" >> /var/log/update_apnic.log 2>&1" >> "$CRONTABS_CONF"
 				echo "${cnf} /usr/bin/${GFWLIST_BIN} --download --output-file \"${GFWLIST_LATEST_FILE}\" >> /var/log/update_gfwlist.log 2>&1" >> "$CRONTABS_CONF"
-				if [ "$need_start_crontab" = "1" ]; then
-					/etc/init.d/cron start
-				fi
+				/etc/init.d/cron start
 			fi
 			return 0
 			;;
