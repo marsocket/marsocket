@@ -313,10 +313,8 @@ add_wan_ac_rules() {
 		echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_src_pr_ac_$port src -j MARSOCKET_WAN_AC_$port
 		#直连优先，规则之外全部直连
 		echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_src_dr_ac_$port src -j MARSOCKET_WAN_AC_$port
-	done
+		echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_src_dr_ac_$port src -j RETURN
 
-	#走指定的规则代理
-	for port in $LOCAL_PORT_LIST; do
 		#规则中使用"Use default proxy"作为代理的, 使用用户自己指定的代理
 		echo -A MARSOCKET_WAN_AC_$port -m set --match-set marsocket_dst_dns_fw dst -j MARSOCKET_WAN_FW_$port
 		echo -A MARSOCKET_WAN_AC_$port -m set --match-set marsocket_dst_fw dst -j MARSOCKET_WAN_FW_$port		
@@ -325,7 +323,7 @@ add_wan_ac_rules() {
 		#直连优先，规则之外全部直连
 		echo -A MARSOCKET_WAN_AC_$port -m set --match-set marsocket_src_dr_ac_$port src -j RETURN
 	done	
-
+	
 	#规则中使用"Use default proxy"作为代理的, 且用户未指定规则，则使用Zone LAN指定的代理
 	echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_dst_dns_fw dst -j MARSOCKET_WAN_FW_$LAN_TARGET_AC_PORT
 	echo -A MARSOCKET_WAN_AC -m set --match-set marsocket_dst_fw dst -j MARSOCKET_WAN_FW_$LAN_TARGET_AC_PORT
