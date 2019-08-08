@@ -37,9 +37,7 @@ function index()
 	entry({"admin", "services", "marsocket", "get_groups_nodelist"}, call("get_groups_nodelist")).leaf = true
 	entry({"admin", "services", "marsocket", "switch_groups_nodelist"}, call("switch_groups_nodelist")).leaf = true
 	entry({"admin", "services", "marsocket", "update_data"}, call("update_data")).leaf = true
-
 	entry({"admin", "services", "marsocket", "check"}, call("check_status")).leaf = true
-	entry({"admin", "services", "marsocket", "checkport"}, call("check_port"))
 
 end
 
@@ -48,34 +46,6 @@ function check_status()
 	local ret = luci.sys.call("/usr/bin/marsocket-check http://www.%s.com" % luci.http.formvalue("set"))
 	luci.http.prepare_content("application/json")
 	luci.http.write_json({ ret = ret })
-end
-
-function check_port()
-	local sk = require("socket")
-	local retstring="<br/><br/>"
-	local marsocket = "marsocket"
-	local uci = luci.model.uci.cursor()
-	uci:foreach(marsocket, "nodes", function(s)
-		local server_name = s.alias
-		if not server_name and s.server and s.server_port then
-			server_name = "%s:%s" % {s.server, s.server_port}
-		end
-		socket = nixio.socket("inet", "stream")
-		socket:setopt("socket", "rcvtimeo", 3)
-		socket:setopt("socket", "sndtimeo", 3)
-		local t = sk.gettime()
-		ret = socket:connect(s.server, s.server_port)
-		if  tostring(ret) == "true" then
-			socket:close()
-			t = (sk.gettime() - t) * 1000
-			retstring = retstring .. "<font color='green'>[" .. server_name .. "] OK (" .. string.format("%.2fms", t) .. ").</font><br/>"
-		else
-			retstring = retstring .. "<font color='red'>[" .. server_name .. "] Error.</font><br/>"
-		end	
-	end)
-
-	luci.http.prepare_content("application/json")
-	luci.http.write_json({ ret = retstring })
 end
 
 local function server_is_running(server, port)
@@ -178,7 +148,7 @@ function update_data()
 	local filename = "/etc/%s/%s-latest" % { marsocket, set }
 	ret = luci.sys.call("/usr/bin/%s-%s --download --output-file \"/etc/%s/%s-latest\" >> /var/log/update_%s.log 2>&1" % { marsocket, set, marsocket, set, set })
 	if ret == 0 then
-		ret = luci.sys.exec("ls -la %s.* | awk 'NR==1 { print $6\" \"$7\" \"$8 }'" % filename)
+		ret = luci.sys.exec("ls -la %s | awk 'NR==1 { print $6\" \"$7\" \"$8 }'" % filename)
 	else
 		ret = "-1"
 	end

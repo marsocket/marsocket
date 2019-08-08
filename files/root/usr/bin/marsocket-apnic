@@ -96,7 +96,7 @@ main() {
 	else
 		cat $APNIC_FILE | awk -F\| '/'$CODE'\|ipv4/ { printf("%s/%d\n", $4, 32-log($5)/log(2)) }' > $OUTPUT_FILE
 	fi
-	[ $? -ne 0 ] || exit 1
+	[ "$?" = "0" ] || exit 1
 	exit 0
 }
 

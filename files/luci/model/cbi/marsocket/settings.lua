@@ -12,7 +12,7 @@ local function datafile_cfgvalue(self, section)
 		% { translate("Update now"), id, self.option }
 	local input = ""
 	--if nixio.fs.access(filename) then
-	local t = luci.sys.exec("ls -la %s.* | awk 'NR==1 { print $6\" \"$7\" \"$8 }'" % filename)
+	local t = luci.sys.exec("ls -la %s | awk 'NR==1 { print $6\" \"$7\" \"$8 }'" % filename)
 	if t == "" then
 		input = "<input type='text' class='cbi-input-text' readonly='readonly' id='%s' value='%s'/>" % { id, translate("Not fonud database file") }
 	else

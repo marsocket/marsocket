@@ -108,7 +108,7 @@ main() {
 	else
 		gfwlist2dnsmasq.sh -f "$GFWLIST_BASE64_FILE" -d "$DNS_IP" -p "$DNS_PORT" -s "$IPSET_NAME" -o "$OUTPUT_FILE"
 	fi
-    [ "$?" == "0" ] || exit 1
+    [ "$?" = "0" ] || exit 1
     exit 0
 }
 
